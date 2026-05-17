@@ -4,7 +4,7 @@ import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { CredentialsManager } from "./services/CredentialsManager"
 import { app, BrowserWindow } from "electron"
-import { extractCodingProblem, isCodingProblemComplete } from "./coding/ProblemExtractor"
+import { extractCodingProblem, isCodingProblemComplete, hasPartialCodingSignal } from "./coding/ProblemExtractor"
 import { isConsciousOptimizationActive } from "./config/optimizations"
 // import dotenv from "dotenv" // Removed static import
 
@@ -161,7 +161,7 @@ export class ProcessingHelper {
     const view = this.appState.getView()
 
     if (view === "queue") {
-      const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
+      const screenshotQueue = [...this.appState.getScreenshotHelper().getScreenshotQueue()]
       if (screenshotQueue.length === 0) {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
@@ -169,9 +169,7 @@ export class ProcessingHelper {
         return
       }
 
-
-
-      const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
+      const allPaths = screenshotQueue;
 
       // NEW: Handle screenshot as plain text (like audio)
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -211,9 +209,16 @@ export class ProcessingHelper {
           }
           this.appState.setProblemInfo(problemInfo);
           // NAT-303: Push structured CodingProblem into SessionTracker for Tier-A prompt injection.
-          // Only store complete problems — partial OCR-only results skip injection.
+          // Originally only complete problems were stored. NAT-OCR-1 extends
+          // this to also store *partial* extractions when the raw OCR looks
+          // like a coding screenshot (`hasPartialCodingSignal`). The
+          // ConsciousOrchestrator now produces a degraded `<problem_context_partial>`
+          // block from those — critical for Groq / Cerebras / Ollama where
+          // the vision-merge step can't run and we'd otherwise lose all
+          // problem context for the A/B/C/D answer contract.
           const session = this.appState.getIntelligenceManager().getSessionTracker();
-          session.setCodingProblem(isCodingProblemComplete(codingProblem) ? codingProblem : null);
+          const shouldStore = isCodingProblemComplete(codingProblem) || hasPartialCodingSignal(codingProblem);
+          session.setCodingProblem(shouldStore ? codingProblem : null);
         } else {
           const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
           if (this.currentProcessingAbortController.signal.aborted) {
@@ -247,7 +252,7 @@ export class ProcessingHelper {
       return;
     } else {
       // Debug mode
-      const extraScreenshotQueue = this.appState.getScreenshotHelper().getExtraScreenshotQueue()
+      const extraScreenshotQueue = [...this.appState.getScreenshotHelper().getExtraScreenshotQueue()]
       if (extraScreenshotQueue.length === 0) {
         // console.log("No extra screenshots to process")
         if (mainWindow && !mainWindow.isDestroyed()) {

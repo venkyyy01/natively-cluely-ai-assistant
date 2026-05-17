@@ -27,6 +27,46 @@ function includesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+const REACTION_OVERLAP_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about',
+  'would', 'what', 'when', 'where', 'which', 'into', 'while', 'there', 'their',
+  'then', 'than', 'been', 'were', 'will', 'could', 'should', 'does', 'did',
+  'are', 'how', 'why', 'can', 'you', 'our', 'but', 'not', 'just', 'still',
+  'also', 'make', 'makes', 'made', 'like', 'need', 'want',
+]);
+
+function tokenizeForOverlap(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .map((token) => {
+        if (token.length > 4 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
+        if (token.length > 4 && token.endsWith('s')) return token.slice(0, -1);
+        return token;
+      })
+      .filter((token) => token.length >= 3 && !REACTION_OVERLAP_STOPWORDS.has(token))
+  );
+}
+
+/**
+ * NAT-CM-AUDIT: a question is "meaningfully" related to a thread when at least
+ * one non-stopword content token is shared. This is intentionally a low bar:
+ * we only use it as a guardrail to convert obviously-off-topic generic follow-ups
+ * into a topic shift, not as the primary continuation signal.
+ */
+function hasMeaningfulOverlapWithThread(question: string, threadCorpus: string): boolean {
+  const qTokens = tokenizeForOverlap(question);
+  if (qTokens.size === 0) return false;
+  const tTokens = tokenizeForOverlap(threadCorpus);
+  if (tTokens.size === 0) return false;
+  for (const token of qTokens) {
+    if (tTokens.has(token)) return true;
+  }
+  return false;
+}
+
 function hasGenericFollowUpCue(text: string): boolean {
   return includesAny(text, [
     /^(and|but|so)\b/i,
@@ -77,7 +117,7 @@ export class QuestionReactionClassifier {
     }
 
     // Fallback to regex-based classification (synchronous)
-    return this.classifyWithRegex(normalized, lower, targetFacets);
+    return this.classifyWithRegex(normalized, lower, targetFacets, input.activeThread);
   }
 
   async classifyAsync(input: {
@@ -116,7 +156,7 @@ export class QuestionReactionClassifier {
 
     // Fallback to regex-based classification
     const lower = normalized.toLowerCase();
-    return this.classifyWithRegex(normalized, lower, targetFacets);
+    return this.classifyWithRegex(normalized, lower, targetFacets, input.activeThread);
   }
 
   private buildReactionFromSetFit(setFitResult: { kind: QuestionReactionKind; confidence: number }, targetFacets: string[]): QuestionReaction {
@@ -142,7 +182,7 @@ export class QuestionReactionClassifier {
     };
   }
 
-  private classifyWithRegex(normalized: string, lower: string, targetFacets: string[]): QuestionReaction {
+  private classifyWithRegex(normalized: string, lower: string, targetFacets: string[], activeThread?: ReasoningThread | null): QuestionReaction {
     const cues: string[] = [];
 
     if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else|let(?:'s| us) talk about|next question|moving on)/i])) {
@@ -237,7 +277,27 @@ export class QuestionReactionClassifier {
       /\b(and|but|so|also|what about|how about|regarding|concerning)\b/i,
       /\b(still|also|instead|too|another|more|further|additionally)\b/i,
     ]);
-    const shouldContinueThread = (wordCount >= 3 && hasGenericFollowUpCue(lower)) || hasImplicitContinuation;
+    const hasReferentialPronoun = /\b(this|that|it|those|these|them|there|then)\b/i.test(lower);
+    let shouldContinueThread = (wordCount >= 3 && hasGenericFollowUpCue(lower)) || hasImplicitContinuation;
+
+    // NAT-CM-AUDIT: when the regex says "continue" but the question shares no
+    // meaningful lexical overlap with the active thread AND has no referential
+    // pronouns, treat it as a topic shift instead. This stops the high-IQ-style
+    // drift where "what about pricing?" continues a database thread just because
+    // it matched generic-follow-up regex. The bar is intentionally low (one
+    // shared content token) so we don't break legitimate continuations.
+    if (shouldContinueThread && activeThread && !hasReferentialPronoun) {
+      const threadCorpus = `${activeThread.rootQuestion} ${activeThread.lastQuestion} ${activeThread.response.likelyFollowUps.join(' ')}`;
+      if (!hasMeaningfulOverlapWithThread(normalized, threadCorpus)) {
+        return {
+          kind: 'topic_shift',
+          confidence: 0.7,
+          cues: ['no_thread_overlap_no_referent'],
+          targetFacets: [],
+          shouldContinueThread: false,
+        };
+      }
+    }
 
     return {
       kind: 'generic_follow_up',

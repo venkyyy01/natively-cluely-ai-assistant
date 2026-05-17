@@ -143,6 +143,13 @@ ANSWER SHAPE: ${intentResult.answerShape}
           /** Called when openingReasoning is extractable from partial JSON.
            *  Enables early display before full response is parsed. */
           onEarlyReasoning?: (text: string) => void;
+          /**
+           * Optional abort signal threaded through the OCR cascade so a
+           * cancelled conscious-mode turn doesn't keep paying ~15 s of
+           * Tesseract CPU per image after the user has moved on. The
+           * signal is also forwarded to the underlying streamChat call.
+           */
+          abortSignal?: AbortSignal;
         }
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
@@ -150,6 +157,49 @@ ANSWER SHAPE: ${intentResult.answerShape}
         const behavioralPromptRequested = intentResult?.intent === 'behavioral'
             || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
             || isBehavioralQuestionText(question);
+
+        // OCR INJECTION (NAT-OCR-1):
+        //
+        // If the active provider is text-only (Groq / Cerebras / Ollama /
+        // cURL-no-image / explicitly text-only OpenAI/Claude variant), the
+        // streaming pipeline downstream will strip image paths anyway. By
+        // resolving the OCR text here we get to:
+        //   1. Prepend the recognised text into the transcript so the
+        //      structured prompt has actual content to reason over.
+        //   2. Replace the "LIVE_CODING_SCREENSHOT_TURN: true" directive
+        //      with an OCR-aware version that tells the model *exactly*
+        //      what input shape it has, instead of asking it to "read the
+        //      screenshot" it can never see.
+        //   3. Drop image paths cleanly so providers that error on images
+        //      (Cerebras has zero vision support) never see them.
+        //
+        // For vision-capable models (Gemini, GPT-4o, Claude vision, Groq
+        // llama-4-scout) `requiresOcr` is `false` and this is a no-op —
+        // the original screenshot → vision LLM path is preserved verbatim.
+        let effectiveImagePaths = imagePaths;
+        let ocrText = '';
+        let ocrUsed = false;
+        if (imagePaths?.length) {
+            try {
+                const resolved = await this.llmHelper.resolveScreenshotTextForNonVision(
+                    imagePaths,
+                    options?.abortSignal,
+                );
+                if (resolved.requiresOcr) {
+                    ocrUsed = true;
+                    ocrText = resolved.text;
+                    effectiveImagePaths = [];
+                }
+            } catch (err) {
+                if (options?.abortSignal?.aborted) {
+                    // Caller already cancelled — propagate so the orchestrator
+                    // can short-circuit the rest of the turn cleanly.
+                    throw err;
+                }
+                console.warn('[WhatToAnswerLLM] OCR resolution failed; falling back to vision path:', err);
+            }
+        }
+
         const liveCodingPromptRequested = Boolean(imagePaths?.length)
             && (
                 intentResult?.intent === 'coding'
@@ -183,19 +233,47 @@ ANSWER SHAPE: ${intentResult.answerShape}
         }
 
         if (liveCodingPromptRequested) {
-            contextParts.push([
-                'LIVE_CODING_SCREENSHOT_TURN: true',
-                'STRICT LIVE-CODING OUTPUT CONTRACT:',
-                '- Return codingInterviewAnswer with all required nested fields.',
-                '- The visible answer must follow exactly: A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning.',
-                '- Include full brute force code and full optimized code.',
-                '- Include time and space complexity plus reasoning for both approaches.',
-                '- Use prior conversation context to avoid contradicting earlier solutions.',
-            ].join('\n'));
+            // Two flavours of the same A/B/C/D contract:
+            //   - vision path: "the screenshot contains the problem; read it"
+            //   - OCR  path:  "the OCR'd text below IS the problem; treat it
+            //                  verbatim; OCR may have minor character errors"
+            // The schema and required fields are identical between the two so
+            // downstream parsing in `parseConsciousModeResponse` does not
+            // change at all.
+            const liveCodingDirective = ocrUsed
+                ? [
+                    'LIVE_CODING_SCREENSHOT_TURN: true',
+                    'INPUT_MODALITY: ocr_text (no image attached)',
+                    'The block labelled SCREENSHOT_OCR below contains the verbatim OCR-extracted text from the user\'s screenshot. Treat it as the source of truth. OCR can introduce small character errors (e.g. l↔1, O↔0, missing punctuation); silently correct obvious noise.',
+                    'STRICT LIVE-CODING OUTPUT CONTRACT:',
+                    '- Return codingInterviewAnswer with all required nested fields.',
+                    '- The visible answer must follow exactly: A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning.',
+                    '- Include full brute force code and full optimized code.',
+                    '- Include time and space complexity plus reasoning for both approaches.',
+                    '- Use prior conversation context to avoid contradicting earlier solutions.',
+                  ].join('\n')
+                : [
+                    'LIVE_CODING_SCREENSHOT_TURN: true',
+                    'STRICT LIVE-CODING OUTPUT CONTRACT:',
+                    '- Return codingInterviewAnswer with all required nested fields.',
+                    '- The visible answer must follow exactly: A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning.',
+                    '- Include full brute force code and full optimized code.',
+                    '- Include time and space complexity plus reasoning for both approaches.',
+                    '- Use prior conversation context to avoid contradicting earlier solutions.',
+                  ].join('\n');
+            contextParts.push(liveCodingDirective);
         }
 
         if (temporalContext?.hasRecentResponses) {
             contextParts.push(`PREVIOUS_RESPONSES: ${temporalContext.previousResponses.join(' | ')}`);
+        }
+
+        if (ocrUsed && ocrText) {
+            // Inject OCR before the conversation transcript so the model
+            // anchors on the screenshot content first; cap to keep the
+            // prompt budget sane (the OCR cascade already trims via
+            // trimScreenshotFallbackText).
+            contextParts.push(`SCREENSHOT_OCR (text-only model — use as primary source):\n${ocrText}`);
         }
 
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
@@ -206,7 +284,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
         ].join('\n\n');
         const stream = this.llmHelper.streamChat(
             message,
-            imagePaths,
+            effectiveImagePaths,
             undefined,
             behavioralPromptRequested
                 ? CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT
@@ -214,9 +292,13 @@ ANSWER SHAPE: ${intentResult.answerShape}
             {
             skipKnowledgeInterception: true,
             qualityTier: 'verify',
+            abortSignal: options?.abortSignal,
         });
 
         for await (const chunk of stream) {
+            if (options?.abortSignal?.aborted) {
+                break;
+            }
             full += chunk;
 
             // NAT-L4: Try to extract openingReasoning from partial JSON

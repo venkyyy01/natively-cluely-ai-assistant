@@ -1,6 +1,9 @@
 import { ipcSchemas, parseIpcInput } from '../ipcValidation';
 import { Metrics } from '../runtime/Metrics';
 import type { HandlerContext } from './handlerContext';
+import { resolveUserDataFilePaths } from './userDataPathGuard';
+
+export type GeminiStreamUserDataPathProvider = () => string;
 
 export type GeminiStreamIpcDeps = Pick<
   HandlerContext,
@@ -11,7 +14,9 @@ export type GeminiStreamIpcDeps = Pick<
   | 'activeChatControllers'
   | 'streamChatStartedAt'
   | 'appState'
->;
+> & {
+  getUserDataPath: GeminiStreamUserDataPathProvider;
+};
 
 export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void {
   const {
@@ -22,6 +27,7 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
     activeChatControllers,
     streamChatStartedAt,
     appState,
+    getUserDataPath,
   } = deps;
 
   const assertNotContained = (): void => {
@@ -30,10 +36,15 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
     }
   };
 
+  const normalizeImagePaths = (imagePaths?: string[]): string[] | undefined => {
+    return resolveUserDataFilePaths(getUserDataPath(), imagePaths);
+  };
+
   safeHandleValidated("gemini-chat", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat'), async (event, message, imagePaths, context, options) => {
     try {
       assertNotContained();
-      const result = await getInferenceLlmHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
+      const safeImagePaths = normalizeImagePaths(imagePaths);
+      const result = await getInferenceLlmHelper().chatWithGemini(message, safeImagePaths, context, options?.skipSystemPrompt);
       assertNotContained();
 
       console.log(`[IPC] gemini - chat response: `, result ? result.substring(0, 50) : "(empty)");
@@ -79,6 +90,7 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
     if (!requestId) {
       throw new Error('gemini-chat-stream requires requestId in options');
     }
+    const safeImagePaths = normalizeImagePaths(imagePaths);
 
     // Clean up any previous controller for this requestId (shouldn't happen, but be safe)
     const previousController = activeChatControllers.get(requestId);
@@ -125,7 +137,7 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
         // USE streamChat which handles routing
         const stream = llmHelper.streamChat(
           message,
-          imagePaths,
+          safeImagePaths,
           context,
           options?.skipSystemPrompt ? "" : undefined,
           { abortSignal: controller.signal, qualityTier: options?.qualityTier }
@@ -201,7 +213,7 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
         }
 
         // Update IntelligenceManager with ASSISTANT message after completion
-        if (fullResponse.trim().length > 0) {
+        if (!aborted && fullResponse.trim().length > 0) {
           intelligenceManager.addAssistantMessage(fullResponse);
           // Log Usage for streaming chat
           intelligenceManager.logUsage('chat', message, fullResponse);

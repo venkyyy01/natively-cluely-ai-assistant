@@ -310,10 +310,12 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, applyWindowsAltTabExclusion, removeWindowsAltTabExclusion, applyWindowsDwmCloak, removeWindowsDwmCloak, verifyWindowsDwmCloak, isWindowsCaptureProtected, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, recognizeTextMacos, recognizeTextWindows, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, applyWindowsNoActivate, clearWindowsNoActivate, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, CursorHook, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
+module.exports.recognizeTextMacos = recognizeTextMacos
+module.exports.recognizeTextWindows = recognizeTextWindows
 module.exports.applyMacosWindowStealth = applyMacosWindowStealth
 module.exports.removeMacosWindowStealth = removeMacosWindowStealth
 module.exports.applyMacosPrivateWindowStealth = applyMacosPrivateWindowStealth
@@ -327,18 +329,15 @@ module.exports.verifySckExclusion = verifySckExclusion
 module.exports.applyWindowsWindowStealth = applyWindowsWindowStealth
 module.exports.removeWindowsWindowStealth = removeWindowsWindowStealth
 module.exports.verifyWindowsStealthState = verifyWindowsStealthState
-module.exports.applyWindowsAltTabExclusion = applyWindowsAltTabExclusion
-module.exports.removeWindowsAltTabExclusion = removeWindowsAltTabExclusion
-module.exports.applyWindowsDwmCloak = applyWindowsDwmCloak
-module.exports.removeWindowsDwmCloak = removeWindowsDwmCloak
-module.exports.verifyWindowsDwmCloak = verifyWindowsDwmCloak
-module.exports.isWindowsCaptureProtected = isWindowsCaptureProtected
+module.exports.applyWindowsNoActivate = applyWindowsNoActivate
+module.exports.clearWindowsNoActivate = clearWindowsNoActivate
 module.exports.listVisibleWindows = listVisibleWindows
 module.exports.checkBrowserCaptureWindows = checkBrowserCaptureWindows
 module.exports.getFilteredDisplayList = getFilteredDisplayList
 module.exports.getRunningProcesses = getRunningProcesses
 module.exports.StealthKeyMonitor = StealthKeyMonitor
 module.exports.suppressKeyEvent = suppressKeyEvent
+module.exports.CursorHook = CursorHook
 module.exports.SystemAudioCapture = SystemAudioCapture
 module.exports.MicrophoneCapture = MicrophoneCapture
 module.exports.getInputDevices = getInputDevices

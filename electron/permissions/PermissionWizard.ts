@@ -3,7 +3,7 @@
 // Guides the user through Microphone, Screen Recording, and Accessibility
 // permissions one at a time, persisting state to avoid re-prompting.
 
-import { app, dialog, shell, systemPreferences, Notification } from 'electron';
+import { app, dialog, shell, systemPreferences, Notification, desktopCapturer } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
@@ -12,6 +12,7 @@ import path from 'path';
 // ---------------------------------------------------------------------------
 
 export type PermissionStatus = 'granted' | 'denied' | 'unknown';
+export type PermissionKey = 'microphone' | 'screenRecording' | 'accessibility';
 
 export interface PermissionState {
   wizardCompleted: boolean;
@@ -19,6 +20,14 @@ export interface PermissionState {
   screenRecording: PermissionStatus;
   accessibility: PermissionStatus;
   lastChecked: string; // ISO 8601
+}
+
+export interface PermissionSnapshot {
+  microphone: PermissionStatus;
+  screenRecording: PermissionStatus;
+  accessibility: PermissionStatus;
+  lastChecked: string;
+  platform: NodeJS.Platform;
 }
 
 export interface PermissionWizardConfig {
@@ -36,6 +45,17 @@ const DEFAULT_PERMISSION_STATE: PermissionState = {
   screenRecording: 'unknown',
   accessibility: 'unknown',
   lastChecked: new Date().toISOString(),
+};
+
+/**
+ * Stable deep-link URLs for the macOS System Settings privacy panes.
+ * macOS 13+ uses x-apple.systempreferences with these keys; the same
+ * URLs work back to macOS 10.15 via legacy Preferences.app fallback.
+ */
+const MAC_SETTINGS_URL_BY_KEY: Record<PermissionKey, string> = {
+  microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+  screenRecording: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
 };
 
 // ---------------------------------------------------------------------------
@@ -242,6 +262,152 @@ export class PermissionWizard {
     }
 
     return revoked;
+  }
+
+  // -------------------------------------------------------------------------
+  // Public re-check + targeted request API (used by IPC + focus listener)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Re-probe every permission, persist the result, and return a snapshot.
+   * Called from:
+   *   - The renderer-facing `permissions:get-state` IPC handler.
+   *   - The `app.on('browser-window-focus')` hook so a permission granted
+   *     in System Settings while the app is running is picked up without a
+   *     restart.
+   *   - The Settings UI on demand when the user clicks "Refresh".
+   *
+   * Never throws — TCC lookup failures degrade to `'unknown'`. The returned
+   * snapshot always reflects the freshest known truth.
+   */
+  checkAndUpdate(): PermissionSnapshot {
+    const previous = this.loadState();
+    const microphone = this.getMicrophoneStatus();
+    const screenRecording = this.getScreenRecordingStatus();
+    const accessibility = this.getAccessibilityStatus();
+    const lastChecked = new Date().toISOString();
+    const next: PermissionState = {
+      ...previous,
+      microphone,
+      screenRecording,
+      accessibility,
+      lastChecked,
+    };
+    // Only persist when something actually changed; avoids a write storm when
+    // browser-window-focus fires repeatedly while permissions are stable.
+    if (
+      previous.microphone !== microphone ||
+      previous.screenRecording !== screenRecording ||
+      previous.accessibility !== accessibility
+    ) {
+      this.saveState(next);
+    }
+    return {
+      microphone,
+      screenRecording,
+      accessibility,
+      lastChecked,
+      platform: process.platform,
+    };
+  }
+
+  /**
+   * Trigger the OS prompt for a single permission. macOS-only. Behaviour:
+   *   - microphone: calls `askForMediaAccess('microphone')`. Triggers the
+   *     OS prompt the first time; resolves to the post-prompt status.
+   *   - screenRecording: opens a tiny `desktopCapturer.getSources` request.
+   *     macOS treats this as the "first attempted capture" and fires the
+   *     consent prompt. Subsequent calls are silent. We then poll the
+   *     status; if still not granted, we open the System Settings pane.
+   *   - accessibility: there is no programmatic prompt API. We open the
+   *     System Settings → Accessibility pane and poll status.
+   *
+   * Returns the post-attempt status. Persists state via `checkAndUpdate()`.
+   */
+  async requestPermission(key: PermissionKey): Promise<PermissionStatus> {
+    if (process.platform !== 'darwin') {
+      // Other platforms either don't gate (Linux microphone via ALSA/PA) or
+      // gate at install time (Windows mic capability). Return current state.
+      return this.snapshotByKey(key);
+    }
+
+    try {
+      switch (key) {
+        case 'microphone': {
+          const status = systemPreferences.getMediaAccessStatus('microphone');
+          if (status === 'not-determined' || status === 'unknown') {
+            const granted = await systemPreferences.askForMediaAccess('microphone');
+            console.log(`[PermissionWizard] askForMediaAccess(microphone) → ${granted}`);
+          } else if (status !== 'granted') {
+            // 'denied' / 'restricted' — System Settings is the only path.
+            await this.openSystemSettings(key);
+          }
+          break;
+        }
+        case 'screenRecording': {
+          // Trigger the OS consent prompt by attempting a token capture.
+          // `desktopCapturer.getSources` is the documented Electron-side
+          // way to invoke the macOS Screen Recording prompt without
+          // actually capturing anything sensitive.
+          try {
+            await desktopCapturer.getSources({
+              types: ['screen'],
+              thumbnailSize: { width: 1, height: 1 },
+            });
+          } catch (err) {
+            console.warn('[PermissionWizard] desktopCapturer probe failed (expected on first run with no consent):', err);
+          }
+          const status = systemPreferences.getMediaAccessStatus('screen');
+          if (status !== 'granted') {
+            // Pre-consent or post-deny: System Settings pane is the next step.
+            await this.openSystemSettings(key);
+          }
+          break;
+        }
+        case 'accessibility': {
+          // No programmatic prompt API. Open the pane and rely on user.
+          await this.openSystemSettings(key);
+          break;
+        }
+        default: {
+          // Exhaustiveness guard.
+          const _exhaustive: never = key;
+          void _exhaustive;
+        }
+      }
+    } catch (err) {
+      console.warn(`[PermissionWizard] requestPermission(${key}) failed:`, err);
+    }
+
+    // Re-probe after the prompt / settings open.
+    this.checkAndUpdate();
+    return this.snapshotByKey(key);
+  }
+
+  /**
+   * Open the System Settings privacy pane for a given permission. Only
+   * meaningful on macOS — other platforms get a best-effort fallback.
+   */
+  async openSystemSettings(key: PermissionKey): Promise<void> {
+    if (process.platform !== 'darwin') {
+      return;
+    }
+    const url = MAC_SETTINGS_URL_BY_KEY[key];
+    if (!url) return;
+    try {
+      await shell.openExternal(url);
+    } catch (err) {
+      console.warn(`[PermissionWizard] openSystemSettings(${key}) failed:`, err);
+    }
+  }
+
+  /** Read just one permission's current status without persisting. */
+  snapshotByKey(key: PermissionKey): PermissionStatus {
+    switch (key) {
+      case 'microphone': return this.getMicrophoneStatus();
+      case 'screenRecording': return this.getScreenRecordingStatus();
+      case 'accessibility': return this.getAccessibilityStatus();
+    }
   }
 
   // -------------------------------------------------------------------------

@@ -210,9 +210,12 @@ function isInferredDominantEvidence(evidence: Array<'suggested' | 'inferred'> | 
 }
 
 function gatherStrictGroundingText(input: ConsciousVerifierJudgeInput): string {
+  // NAT-CM-AUDIT: keep grounding consistent with ConsciousProvenanceVerifier — never
+  // treat the user-asked question as evidence. Echoing a term from the question is not
+  // grounding; using it as such lets a confident hallucination "self-supply" support
+  // (audit A-9). Strict grounding stays on hypothesis-derived material only.
   const hypothesis = input.hypothesis;
   return [
-    input.question,
     hypothesis?.sourceQuestion,
     hypothesis?.latestSuggestedAnswer,
     ...(hypothesis?.likelyThemes || []),

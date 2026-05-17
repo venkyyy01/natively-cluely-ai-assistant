@@ -8,6 +8,24 @@ export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
 /**
+ * Run Apple Vision OCR on the image at `image_path`.
+ *
+ * Returns the recognized text as a single string with newline-separated
+ * lines, ordered top-to-bottom as Vision reports them. Returns an empty
+ * string when no text is found. Errors include the literal phrase
+ * "Unsupported on this platform" on non-macOS so the TS-side cascade
+ * can pattern-match and skip cleanly without logging at warn level.
+ */
+export declare function recognizeTextMacos(imagePath: string): string
+/**
+ * Run Windows.Media.Ocr on the image at `image_path`.
+ *
+ * Same contract as `recognize_text_macos`. Errors with "Unsupported on this
+ * platform" on non-Windows so the cascade falls through to the next
+ * provider (Tesseract) cleanly.
+ */
+export declare function recognizeTextWindows(imagePath: string): string
+/**
  * Represents information about a visible window.
  * Used by the Electron side for capture detection instead of spawning Python.
  */
@@ -56,35 +74,24 @@ export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
 /**
- * Windows: hide the window from Alt-Tab via WS_EX_TOOLWINDOW.
- * On non-Windows this is a no-op.
+ * Apply the WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW extended window styles to
+ * a Windows HWND. Prevents the OS from promoting the window to foreground
+ * on click — the analogue of macOS's NSPanel non-activating panel. Used by
+ * the overlay window to avoid sending `blur` events to the focused browser
+ * tab when the user interacts with the overlay.
+ *
+ * On non-Windows platforms this is a no-op.
  */
-export declare function applyWindowsAltTabExclusion(hwndBuffer: Buffer): void
+export declare function applyWindowsNoActivate(hwndBuffer: Buffer): void
 /**
- * Windows: restore Alt-Tab visibility (clear WS_EX_TOOLWINDOW, set WS_EX_APPWINDOW).
- * On non-Windows this is a no-op.
+ * Reverse of `apply_windows_no_activate`. Restores the ability of the
+ * window to receive native foreground activation. Called when stealth
+ * mode is disabled or when the overlay needs to receive native focus on
+ * demand (e.g. while typing into an input field).
+ *
+ * On non-Windows platforms this is a no-op.
  */
-export declare function removeWindowsAltTabExclusion(hwndBuffer: Buffer): void
-/**
- * Windows: cloak the window from DWM composition (DWMWA_CLOAK).
- * Adds a second layer over SetWindowDisplayAffinity. No-op on non-Windows.
- */
-export declare function applyWindowsDwmCloak(hwndBuffer: Buffer): void
-/**
- * Windows: uncloak the window from DWM composition.
- * No-op on non-Windows.
- */
-export declare function removeWindowsDwmCloak(hwndBuffer: Buffer): void
-/**
- * Windows: returns true if the window is currently DWM-cloaked.
- * On non-Windows always returns false.
- */
-export declare function verifyWindowsDwmCloak(hwndBuffer: Buffer): boolean
-/**
- * Windows: returns true if the window's display affinity is currently
- * WDA_EXCLUDEFROMCAPTURE. Used by the enforcement loop.
- */
-export declare function isWindowsCaptureProtected(hwndBuffer: Buffer): boolean
+export declare function clearWindowsNoActivate(hwndBuffer: Buffer): void
 /**
  * List all visible windows using Core Graphics.
  * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
@@ -218,6 +225,46 @@ export declare class StealthKeyMonitor {
    * decide whether to fall back to globalShortcut.
    */
   isTapActive(): boolean
+}
+/**
+ * JS-facing cross-platform cursor hook controller.
+ *
+ * Backed by `CGEventTap` on macOS and `WH_MOUSE_LL` on Windows. Both
+ * implementations share the same JS API and event payload shape.
+ *
+ * Lifecycle:
+ *   const hook = new CursorHook();
+ *   hook.setOverlayBounds(x, y, width, height);
+ *   hook.setActive(true);                    // arms (overlay visible)
+ *   hook.start(event => { ... });            // installs hook, throws if perms denied / unsupported
+ *   ...
+ *   hook.setActive(false);                   // disarms (overlay hidden)
+ *   hook.stop();                             // tears the hook down
+ */
+export declare class CursorHook {
+  constructor()
+  /**
+   * Update the overlay bounding rectangle in global screen coordinates.
+   * Called whenever the overlay moves, resizes, or changes display.
+   */
+  setOverlayBounds(x: number, y: number, width: number, height: number): void
+  /**
+   * Toggle whether the hook should suppress events when the cursor enters
+   * the overlay. The hook stays installed either way; `setActive=false`
+   * just makes the hot path a passthrough so we don't pay the round-trip
+   * cost of starting / stopping it on every overlay show/hide.
+   */
+  setActive(active: boolean): void
+  /**
+   * Install the platform-specific hook. Errors when:
+   *   - macOS: Accessibility permission has not been granted.
+   *   - Windows: SetWindowsHookExW failed (rare, usually permission-related).
+   *   - Other platforms: returns Ok with no-op (hook is unsupported).
+   */
+  start(callback: (...args: any[]) => any): void
+  stop(): void
+  /** Whether the hook is currently running. */
+  isActive(): boolean
 }
 export declare class SystemAudioCapture {
   constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)

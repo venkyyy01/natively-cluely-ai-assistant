@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from "react"
 import { IoLogOutOutline } from "react-icons/io5"
 import { Dialog, DialogContent, DialogClose } from "../ui/dialog"
 
+/** Platform-aware modifier key symbol */
+const MOD = navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl';
+
 interface QueueCommandsProps {
   onTooltipVisibilityChange: (visible: boolean, height: number) => void
   screenshots: Array<{ path: string; preview: string }>
@@ -127,10 +130,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           <span className="text-[11px] leading-none">Show/Hide</span>
           <div className="flex gap-1">
             <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
-              ⌘
+              {MOD}
             </button>
             <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
-              B
+              ⇧
+            </button>
+            <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
+              Space
             </button>
           </div>
         </div>
@@ -144,7 +150,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             <span className="text-[11px] leading-none">Solve</span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
-                ⌘
+                {MOD}
               </button>
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                 ↵
@@ -219,10 +225,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         <span className="truncate">Toggle Window</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
-                            ⌘
+                            {MOD}
                           </span>
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
-                            B
+                            ⇧
+                          </span>
+                          <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            Space
                           </span>
                         </div>
                       </div>
@@ -236,10 +245,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         <span className="truncate">Take Screenshot</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
-                            ⌘
+                            {MOD}
                           </span>
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
-                            H
+                            ⇧
+                          </span>
+                          <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            \
                           </span>
                         </div>
                       </div>
@@ -253,10 +265,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                     {/* Solve Command */}
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="truncate">Solve Problem</span>
+                        <span className="truncate">Process / Solve</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
-                            ⌘
+                            {MOD}
                           </span>
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                             ↵
@@ -265,6 +277,27 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                       </div>
                       <p className="text-[10px] leading-relaxed text-white/70 truncate">
                         Generate a solution based on the current problem.
+                      </p>
+                    </div>
+
+                    {/* Cursor Stealth */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="truncate">Cursor Stealth</span>
+                        <div className="flex gap-1 flex-shrink-0">
+                          <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            {MOD}
+                          </span>
+                          <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            ⇧
+                          </span>
+                          <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
+                            -
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-[10px] leading-relaxed text-white/70 truncate">
+                        Toggle software cursor inside the overlay.
                       </p>
                     </div>
                   </div>

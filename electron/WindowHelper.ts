@@ -4,6 +4,7 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
+import { CursorHookController } from "./stealth/CursorHookController"
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
 import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 import { attachRevealSafetyNet, attachWindowCrashRecovery } from "./startup/rendererBridgeRecovery"
@@ -68,6 +69,20 @@ export class WindowHelper {
   private detachDirectLauncherBridgeMonitor: (() => void) | null = null
   private detachDirectOverlayBridgeMonitor: (() => void) | null = null
   private overlayPositionInitialized: boolean = false
+  // BLUR-PROOF: Whether the overlay is allowed to receive native foreground
+  // activation. Default false on win32 + darwin so clicking the overlay does
+  // NOT promote the Electron app to foreground (which would fire `blur` on
+  // any focused browser tab — the canonical proctoring detection signal).
+  // Toggle to `true` only when the user is actively typing into the overlay.
+  private overlayInteractive: boolean = false
+  // Cached HWND buffer so we can clear the WS_EX_NOACTIVATE bits on dispose
+  // without having to read getNativeWindowHandle on a destroyed BrowserWindow.
+  private overlayHwndBuffer: Buffer | null = null
+  // CURSOR-FREEZE (macOS only): controls the CGEventTap-based hardware
+  // cursor freeze. Lifecycle: created lazily on the first enable call after
+  // the overlay window exists. Persists across overlay show/hide cycles.
+  private cursorController: CursorHookController | null = null
+  private cursorHookEnabled: boolean = false
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -466,6 +481,74 @@ export class WindowHelper {
     });
   }
 
+  /**
+   * Lazily resolve the native module without paying the cost on every call.
+   * Returns null if the native module is unavailable (e.g. dev environment
+   * without the prebuilt binary). All callers guard for null.
+   */
+  private getNativeStealthModule(): {
+    applyWindowsNoActivate?: (handle: Buffer) => void
+    clearWindowsNoActivate?: (handle: Buffer) => void
+  } | null {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return require('natively-audio')
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Apply WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW to the overlay HWND on Windows.
+   * Idempotent — safe to call repeatedly. The kernel of the Windows
+   * "blur-proof" stealth: with these bits set, clicking the overlay does
+   * NOT raise WM_ACTIVATEAPP and the underlying browser keeps focus.
+   */
+  private applyWindowsOverlayNoActivate(): void {
+    if (process.platform !== 'win32') return
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    let handle: Buffer | undefined
+    try {
+      handle = this.overlayWindow.getNativeWindowHandle?.()
+    } catch (err) {
+      console.warn('[WindowHelper] getNativeWindowHandle failed for overlay:', err)
+      return
+    }
+    if (!handle) return
+    this.overlayHwndBuffer = handle
+
+    const native = this.getNativeStealthModule()
+    if (!native?.applyWindowsNoActivate) return
+    try {
+      native.applyWindowsNoActivate(handle)
+    } catch (err) {
+      console.warn('[WindowHelper] applyWindowsNoActivate failed:', err)
+    }
+  }
+
+  /**
+   * Reverse of applyWindowsOverlayNoActivate. Called when the overlay needs
+   * to receive native focus on demand (typing into an input field) or when
+   * the overlay is being destroyed.
+   */
+  private clearWindowsOverlayNoActivate(): void {
+    if (process.platform !== 'win32') return
+    const handle = this.overlayHwndBuffer
+      ?? (this.overlayWindow && !this.overlayWindow.isDestroyed()
+        ? this.overlayWindow.getNativeWindowHandle?.()
+        : undefined)
+    if (!handle) return
+
+    const native = this.getNativeStealthModule()
+    if (!native?.clearWindowsNoActivate) return
+    try {
+      native.clearWindowsNoActivate(handle)
+    } catch (err) {
+      console.warn('[WindowHelper] clearWindowsNoActivate failed:', err)
+    }
+  }
+
   private applyContentProtection(enable: boolean): void {
     const windows = [
       { win: this.launcherWindow, auxiliary: false },
@@ -552,9 +635,25 @@ export class WindowHelper {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
 
     this.overlayWindow.setIgnoreMouseEvents(enabled, enabled ? { forward: true } : undefined)
-    this.overlayWindow.setFocusable(!enabled)
+    // BLUR-PROOF: focusability is owned by `overlayInteractive`, NOT by
+    // clickthrough state. Forcing setFocusable(true) when clickthrough is
+    // turned off would drop WS_EX_NOACTIVATE on Windows and re-enable
+    // foreground activation on macOS NSPanel — both of which would fire
+    // `blur` in the underlying browser. When clickthrough is enabled we
+    // explicitly drop focusability (since clicks pass through anyway);
+    // when it is disabled we honour `overlayInteractive`.
+    if (enabled) {
+      this.overlayWindow.setFocusable(false)
+    } else {
+      this.overlayWindow.setFocusable(this.overlayInteractive)
+    }
     if (enabled) {
       this.overlayWindow.blur()
+    }
+    // Re-assert WS_EX_NOACTIVATE on Windows whenever clickthrough flips —
+    // setIgnoreMouseEvents and setFocusable both touch the EX style.
+    if (process.platform === 'win32' && !this.overlayInteractive) {
+      this.applyWindowsOverlayNoActivate()
     }
   }
 
@@ -562,6 +661,110 @@ export class WindowHelper {
     const next = !this.overlayClickthroughEnabled
     this.setOverlayClickthrough(next)
     return next
+  }
+
+  /**
+   * Toggle the overlay between non-activating (default) and activating
+   * (interactive) modes.
+   *
+   * Non-activating (interactive=false): clicking the overlay does NOT
+   * promote the Electron app to foreground. macOS stays an NSPanel; on
+   * Windows we keep WS_EX_NOACTIVATE asserted on the HWND. Browsers do
+   * not fire `blur` / `focusout` / `hasFocus()→false` when the user
+   * interacts with the overlay. This is the default and the behaviour
+   * proctors should never see a deviation from.
+   *
+   * Activating (interactive=true): the overlay can take native focus so
+   * HTML <input> elements inside it can receive keystrokes. Use this
+   * sparingly — it WILL fire one blur event in the underlying browser.
+   * The renderer should call this on the user's deliberate action
+   * (focusing a chat input) and switch back to non-activating on Esc /
+   * blur / submit.
+   */
+  public setOverlayInteractive(enabled: boolean): void {
+    if (this.overlayInteractive === enabled) return
+    this.overlayInteractive = enabled
+
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    if (process.platform === 'win32') {
+      // setFocusable on Windows is the runtime equivalent of toggling the
+      // WS_EX_NOACTIVATE bit. Pair it with an explicit native style flip
+      // because Electron's setFocusable does not always update the EX style.
+      try {
+        this.overlayWindow.setFocusable(enabled)
+      } catch (err) {
+        console.warn('[WindowHelper] setFocusable failed:', err)
+      }
+      if (enabled) {
+        this.clearWindowsOverlayNoActivate()
+      } else {
+        this.applyWindowsOverlayNoActivate()
+        // Drop any focus the renderer may have grabbed while interactive.
+        try {
+          this.overlayWindow.blur()
+        } catch (err) {
+          console.warn('[WindowHelper] blur failed:', err)
+        }
+      }
+    }
+    // macOS: NSPanel is permanently non-activating regardless of this flag.
+    // The renderer can still focus inputs via first-responder routing on the
+    // panel — the panel becomes key without activating the app.
+  }
+
+  public isOverlayInteractive(): boolean {
+    return this.overlayInteractive
+  }
+
+  /**
+   * Enable or disable the cursor freeze hook. When enabled and the
+   * overlay is visible, the OS hardware cursor is frozen at the overlay's
+   * boundary by a low-level cursor hook (CGEventTap on macOS, WH_MOUSE_LL
+   * on Windows) and the renderer paints a software cursor in its place.
+   * The software cursor lives entirely inside the capture-excluded
+   * overlay surface, so screen-share captures only see the frozen
+   * hardware cursor at the overlay edge.
+   *
+   * No-op on platforms other than macOS / Windows.
+   *
+   * Returns true if the controller is now installed (or was already);
+   * false if the OS permission was denied or the native binding is
+   * unavailable. Callers should surface that to the user with a clear
+   * message ("Grant Accessibility permission to enable cursor stealth"
+   * on macOS) rather than silently re-trying.
+   */
+  public setCursorHookEnabled(enabled: boolean): boolean {
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return false
+    this.cursorHookEnabled = enabled
+    if (!enabled) {
+      this.cursorController?.disable()
+      return false
+    }
+
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) {
+      // Defer until the overlay window is created. createWindow() will pick
+      // up the cursorHookEnabled flag and call enable() then.
+      return true
+    }
+
+    if (!this.cursorController) {
+      this.cursorController = new CursorHookController(this.overlayWindow)
+    }
+    return this.cursorController.enable()
+  }
+
+  public isCursorHookEnabled(): boolean {
+    return this.cursorHookEnabled && (this.cursorController?.isEnabled() ?? false)
+  }
+
+  /**
+   * Whether the user has requested cursor stealth (regardless of whether
+   * the native hook is currently installed — useful for showing a
+   * "permission needed" hint in Settings).
+   */
+  public isCursorHookRequested(): boolean {
+    return this.cursorHookEnabled
   }
 
   public createWindow(): void {
@@ -782,6 +985,20 @@ this.launcherContentWindow = this.launcherWindow
   // S-RACE-3: Same stealth ordering guarantee as launcher (see comment above).
   // Overlay is created via createDirectWindow() or StealthRuntime, ensuring
   // stealth is applied synchronously before loadURL or show.
+  //
+  // BLUR-PROOF FOCUS HANDLING:
+  //  - macOS: `type: 'panel'` builds the overlay as an NSPanel with the
+  //    NSWindowStyleMaskNonactivatingPanel bit. Clicks and key events reach
+  //    the panel without `[NSApp activate]` running, so any underlying
+  //    browser tab keeps key-window status — no `blur` or `focusout` event
+  //    fires in the page.
+  //  - win32: `focusable: false` is the Electron primitive for
+  //    WS_EX_NOACTIVATE. When passed at construction time Electron sets the
+  //    extended style on the HWND. We additionally re-assert
+  //    `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` via a native helper after the
+  //    HWND exists, in case Electron drops the bits on a later setBounds /
+  //    show. With those bits set, clicking the overlay does NOT promote
+  //    Electron to the foreground app, so Chrome does not fire blur.
   const overlaySettings: Electron.BrowserWindowConstructorOptions = {
     width: 600,
     height: 1,
@@ -799,11 +1016,17 @@ this.launcherContentWindow = this.launcherWindow
     transparent: true,
     backgroundColor: "#00000000",
     alwaysOnTop: true,
-    focusable: true,
+    // win32: born non-activating. macOS: NSPanel still allows first-responder
+    // for the in-window input field, so leave focusable: true there.
+    focusable: process.platform === 'win32' ? this.overlayInteractive : true,
     resizable: true,
     movable: true,
     skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
+    // macOS only: tag the overlay as a panel so AppKit instantiates it as
+    // NSPanel with NSWindowStyleMaskNonactivatingPanel. No effect on other
+    // platforms (Electron ignores the field there).
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
   }
 
     if (useStealthRuntime) {
@@ -871,7 +1094,28 @@ this.launcherContentWindow = this.launcherWindow
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
+
+    // BLUR-PROOF (Windows): re-assert WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW on
+    // the HWND. Electron sets WS_EX_NOACTIVATE when `focusable: false` is
+    // passed at construction, but the bit is sometimes dropped on subsequent
+    // calls (setBounds, setIgnoreMouseEvents, show). Calling the native
+    // helper here is idempotent and survives Electron's internal toggles.
+    if (process.platform === 'win32' && !this.overlayInteractive) {
+      this.applyWindowsOverlayNoActivate()
+    }
+
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
+
+    // CURSOR-FREEZE: if the user enabled the cursor hook before the overlay
+    // existed, install it now. Otherwise the controller is created lazily on
+    // the first setCursorHookEnabled(true) call.
+    if (process.platform === 'darwin' && this.cursorHookEnabled && !this.overlayWindow.isDestroyed()) {
+      if (!this.cursorController) {
+        this.cursorController = new CursorHookController(this.overlayWindow)
+      }
+      this.cursorController.enable()
+    }
+
     if (this.launcherRuntime) {
       console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
     }
@@ -912,8 +1156,17 @@ this.launcherContentWindow = this.launcherWindow
       this.launcherWindow = null
       this.launcherContentWindow = null
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        // Drop the no-activate bits before destroying the HWND so any
+        // recreated overlay starts from a clean style state.
+        this.clearWindowsOverlayNoActivate()
         this.overlayWindow.close()
       }
+      this.overlayHwndBuffer = null
+      // Tear down the cursor controller — its CGEventTap holds a reference
+      // to the overlay window via the bounds-listeners. Calling disable()
+      // detaches listeners and stops the tap thread cleanly.
+      this.cursorController?.disable()
+      this.cursorController = null
       this.overlayRuntime?.destroy()
       this.overlayRuntime = null
       this.overlayContentWindow = null
@@ -1026,6 +1279,12 @@ this.launcherContentWindow = this.launcherWindow
         this.setWindowOpacity(this.overlayWindow, 0, 'WindowHelper.switchToOverlay.win32');
         this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay.win32');
         this.applyStealth(this.overlayWindow, true, 'primary', false);
+        // Re-assert WS_EX_NOACTIVATE — applyStealth may toggle styles that
+        // implicitly clear the bit. No-op when the user has explicitly
+        // requested interactive mode (typing).
+        if (!this.overlayInteractive) {
+          this.applyWindowsOverlayNoActivate();
+        }
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
 
@@ -1035,14 +1294,26 @@ this.launcherContentWindow = this.launcherWindow
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
         this.setWindowOpacity(this.overlayWindow, 1, 'WindowHelper.switchToOverlay.win32.restore');
         this.stealthManager.reapplyAfterShow(this.overlayWindow);
-        if (!this.overlayClickthroughEnabled) {
+        // BLUR-PROOF: do NOT call .focus() in non-interactive mode — that
+        // would force WM_ACTIVATEAPP and steal foreground from the browser.
+        if (!this.overlayClickthroughEnabled && this.overlayInteractive) {
           this.overlayWindow.focus();
         }
         this.overlayWindow.setAlwaysOnTop(true, "floating");
+        // Final re-assertion — Electron sometimes drops EX styles after
+        // setOpacity transitions on Windows 11. Idempotent.
+        if (!this.overlayInteractive) {
+          this.applyWindowsOverlayNoActivate();
+        }
       }
     }, 16);
       } else {
         this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
+        // Re-assert WS_EX_NOACTIVATE on the non-content-protected Windows
+        // path too — applyStealth may have touched styles.
+        if (process.platform === 'win32' && !this.overlayInteractive) {
+          this.applyWindowsOverlayNoActivate();
+        }
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // STEALTH: Use showInactive() on macOS to prevent stealing focus from the
         // browser. The overlay appears on screen but Chrome keeps key-window status,
@@ -1054,8 +1325,19 @@ this.launcherContentWindow = this.launcherWindow
           this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay')
         }
         this.stealthManager.reapplyAfterShow(this.overlayWindow);
+        // Only call focus() when:
+        //   - Linux/other (no blur-proof primitive available), OR
+        //   - Windows AND the user has opted into interactive mode for typing
+        // Never on macOS (NSPanel handles activation; calling focus() would
+        // promote the app and trigger blur on the browser).
         if (!this.overlayClickthroughEnabled && process.platform !== 'darwin') {
-          this.overlayWindow.focus();
+          if (process.platform === 'win32') {
+            if (this.overlayInteractive) {
+              this.overlayWindow.focus();
+            }
+          } else {
+            this.overlayWindow.focus();
+          }
         }
         this.overlayWindow.setAlwaysOnTop(true, "floating");
       }

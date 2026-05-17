@@ -4,6 +4,7 @@ import { initializeIpcHandlers } from "../ipcHandlers"
 import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
+import { SettingsManager } from "../services/SettingsManager"
 import { refreshLogFilePath } from './logging'
 import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
 import { installConsoleRedactor } from '../stealth/consoleRedactor'
@@ -15,7 +16,6 @@ import {
 } from '../startup/StartupHealer'
 import { validateIntegrity } from '../integrity/IntegrityValidator'
 import { applyAdaptiveAcceleration } from '../config/optimizations'
-import { createPermissionWizard } from '../permissions/PermissionWizard'
 
 // Application initialization
 
@@ -142,13 +142,18 @@ export async function initializeApp() {
 
     // NAT-PERMISSIONS: Use PermissionWizard for first-launch flow and revocation detection.
     // Replaces the standalone microphone check with a comprehensive sequential wizard.
+    // The wizard instance lives on AppState so the IPC handlers and the
+    // browser-window-focus re-check below share its state file and cache.
     if (process.platform === 'darwin') {
-      const wizard = createPermissionWizard();
+      const wizard = appState.getPermissionWizard();
       if (wizard.shouldRunWizard()) {
         await wizard.runWizard();
       } else {
         await wizard.checkRevocations();
       }
+      // Re-check on every focus so a permission granted in System Settings
+      // mid-session lights up the dependent feature without an app restart.
+      appState.installPermissionFocusListener();
     }
     
     // Start the Ollama lifecycle manager
@@ -170,6 +175,13 @@ export async function initializeApp() {
   if (appState.getUndetectable()) {
     if (process.platform === 'darwin') {
       app.dock.hide();
+      // BLUR-PROOF (macOS Phase 2): apply 'accessory' activation policy at
+      // startup too so the very first window the OS sees is non-activating.
+      try {
+        app.setActivationPolicy?.('accessory');
+      } catch (err) {
+        console.warn('[bootstrap] setActivationPolicy(accessory) failed:', err);
+      }
     }
   }
 
@@ -179,6 +191,32 @@ export async function initializeApp() {
   if (appState.getUndetectable() && process.platform === 'win32') {
     // Re-apply stealth state to ensure Windows taskbar hide runs after window exists
     appState.setUndetectable(true);
+  }
+
+  // Cursor stealth: re-apply the persisted user choice after the overlay
+  // window exists. This is opt-in (off by default) and triggers the OS
+  // Accessibility prompt the first time the user enables it. We do this
+  // after createWindow() so the WindowHelper's overlay BrowserWindow is
+  // constructed and the controller can attach lifecycle listeners.
+  try {
+    const cursorEnabledFromSettings =
+      SettingsManager.getInstance().get('cursorHookEnabled') ?? false;
+    if (cursorEnabledFromSettings) {
+      // setCursorHookEnabled(true) returns false if the OS permission was
+      // revoked between sessions or the native binding is missing. We log
+      // the silent-degraded outcome so diagnostics show why the cursor
+      // freeze isn't active even though Settings shows it as enabled.
+      // The Settings UI separately polls getCursorHookStatus on mount and
+      // surfaces a "permission needed" hint to the user.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(true);
+      if (!installed) {
+        console.warn(
+          '[bootstrap] Cursor stealth was enabled in settings but native hook did not install (likely Accessibility permission denied or native module missing). User-facing toggle will display "permission needed" until the user re-enables.',
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[bootstrap] Failed to restore cursor hook setting:', err);
   }
 
   // NAT-SELF-HEAL: window created and renderer bridge is on its way.

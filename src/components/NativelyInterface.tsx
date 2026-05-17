@@ -163,6 +163,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const activeRagStreamingIdRef = useRef<string | null>(null);
     const activeIntelligenceStreamingIdsRef = useRef<Record<string, string>>({});
 
+    // NAT-EXPLICIT-OVERRIDE: Forward reference to handleManualSubmit so
+    // handleWhatToSay (declared earlier) can delegate to it when the
+    // input box has typed text. The ref is populated below after
+    // handleManualSubmit is declared, so the forward call resolves at
+    // invocation time rather than at declaration time.
+    const handleManualSubmitRef = useRef<(() => Promise<void> | void) | null>(null);
+
     const nextMessageId = useCallback((prefix: string) => {
         const id = createMessageId(prefix, Date.now(), messageIdCounterRef.current);
         messageIdCounterRef.current += 1;
@@ -936,6 +943,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     }, [analytics]);
 
     const handleWhatToSay = useCallback(async () => {
+        // NAT-EXPLICIT-OVERRIDE: When the user has typed something into
+        // the input box (with or without screenshots), treat that as an
+        // explicit request and route through the manual-submit pipeline
+        // (`streamGeminiChat`) which bypasses cooldown, anti-bombardment
+        // dedup, and the conscious-mode question-resolution gate. The
+        // user told us exactly what they want — process it, don't gate.
+        //
+        // `runWhatShouldISay` is reserved for the implicit "use the
+        // current transcript / queued screenshots, infer intent" path
+        // (Cmd+Enter with empty input box).
+        if (inputValue.trim().length > 0) {
+            handleManualSubmitRef.current?.();
+            return;
+        }
+
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('what_to_say');
@@ -1036,7 +1058,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             );
             setIsProcessing(false);
         }
-    }, [attachedContext, setIsExpanded, setIsProcessing, setMessages, setAttachedContext, analytics]);
+    }, [inputValue, attachedContext, setIsExpanded, setIsProcessing, setMessages, setAttachedContext, analytics]);
 
     const handleFollowUp = useCallback(async (intent: string = 'rephrase') => {
         setIsExpanded(true);
@@ -1611,6 +1633,12 @@ Provide only the answer, nothing else.`;
             ));
         }
     };
+
+    // NAT-EXPLICIT-OVERRIDE: Keep the forward-declared ref pointing at
+    // the latest handleManualSubmit closure on every render so
+    // handleWhatToSay can call into it without a circular declaration
+    // dependency.
+    handleManualSubmitRef.current = handleManualSubmit;
 
     const clearChat = () => {
         setMessages([]);

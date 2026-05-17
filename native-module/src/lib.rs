@@ -19,11 +19,13 @@ use ringbuf::traits::Consumer;
 pub mod audio_config;
 pub mod license;
 pub mod microphone;
+pub mod ocr;
 pub mod resampler;
 pub mod silence_suppression;
 pub mod speaker;
 pub mod stealth;
 pub mod stealth_keys;
+pub mod cursor_hook;
 
 use crate::audio_config::DSP_POLL_MS;
 use crate::resampler::PolyphaseResampler;

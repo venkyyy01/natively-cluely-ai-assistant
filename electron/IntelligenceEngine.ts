@@ -209,6 +209,11 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousOrchestrator,
       this.consciousContextComposer,
       this.consciousIntentService,
+      undefined,
+      undefined,
+      // NAT-CM-AUDIT: pass llmHelper as the structured client so the semantic
+      // question classifier can refine ambiguous regex classifications.
+      this.llmHelper,
     );
     this.initializeLLMs();
     const optimizationFlags = getOptimizationFlags();
@@ -437,6 +442,9 @@ export class IntelligenceEngine extends EventEmitter {
             this.consciousOrchestrator,
             this.consciousContextComposer,
             this.consciousIntentService,
+            undefined,
+            undefined,
+            this.llmHelper,
         );
         // NAT-048: clear fingerprint history on session switch — answers
         // emitted to a previous user must not suppress identical-looking
@@ -623,7 +631,7 @@ export class IntelligenceEngine extends EventEmitter {
         });
     }
 
-    private buildCooldownKey(question: string | undefined): string {
+    private buildCooldownKey(question: string | undefined, imagePaths?: string[]): string {
         const normalizedQuestion = (question || 'inferred')
             .trim()
             .toLowerCase()
@@ -633,7 +641,18 @@ export class IntelligenceEngine extends EventEmitter {
             ? `${activeThread.rootQuestion.trim().toLowerCase()}::${activeThread.followUpCount}`
             : 'no-thread';
 
-        return `${threadKey}:${normalizedQuestion}`;
+        // NAT-SCREENSHOT-COOLDOWN: When the trigger is screenshot-driven,
+        // include the image path set in the cooldown key. Two consecutive
+        // screenshots in independent / live-coding mode use the same
+        // synthetic question string, which would otherwise collide and
+        // suppress the second response under the trigger cooldown.
+        // Hashing the file paths gives each screenshot a distinct key
+        // while still deduping a real double-trigger on the same image.
+        const imageKey = imagePaths && imagePaths.length > 0
+            ? `::img:${imagePaths.slice().sort().join('|')}`
+            : '';
+
+        return `${threadKey}:${normalizedQuestion}${imageKey}`;
     }
 
     private pruneCooldownKeys(now: number): void {
@@ -838,7 +857,14 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
-        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
+        await this.runWhatShouldISay(
+            trigger.lastQuestion,
+            trigger.confidence,
+            trigger.imagePaths,
+            0,
+            undefined,
+            trigger.sourceUtteranceId,
+        );
     }
 
     // ============================================
@@ -916,7 +942,35 @@ export class IntelligenceEngine extends EventEmitter {
         priorCooldownReason?: CooldownSuppressionReason,
         sourceUtteranceId?: string,
     ): Promise<string | null> {
-        const initialResolvedQuestion = this.resolveWhatToSayQuestion(question);
+        let initialResolvedQuestion = this.resolveWhatToSayQuestion(question);
+
+        // NAT-SCREENSHOT-INDEPENDENT: When screenshots are present but no
+        // interviewer question is available, inject a screenshot-driven
+        // synthetic question so the pipeline runs end-to-end instead of
+        // suppressing. Two scenarios produce this state:
+        //
+        //   1. Conscious mode OFF, no meeting — user wants generic /
+        //      coding screenshot help with no audio context.
+        //   2. Meeting active but transcripts are still warming up
+        //      (Deepgram took 8-10 s to emit its first turn in today's
+        //      logs) — the user pressed the shortcut before a question
+        //      landed.
+        //
+        // The synthetic string deliberately contains "this screenshot"
+        // so `isScreenshotBackedLiveCodingTurn` matches and the conscious
+        // / coding answer route fires when conscious mode is enabled.
+        // For live interviews where transcripts ARE flowing, the regular
+        // resolution path takes precedence and the synthetic fallback
+        // never fires.
+        if (!initialResolvedQuestion && imagePaths?.length) {
+            const syntheticQuestion = 'Analyze this screenshot and help me with what is shown — if it is code, an editor, a coding problem, or a coderpad / OA, treat it as a coding task and produce a working solution; otherwise summarise what is shown and answer any visible question.';
+            console.log('[INTELLIGENCE] No resolved question but screenshots present — using synthetic question for independent screenshot processing.', {
+                imagePaths: imagePaths.length,
+                consciousModeEnabled: this.session.isConsciousModeEnabled(),
+            });
+            initialResolvedQuestion = syntheticQuestion;
+        }
+
         if (!initialResolvedQuestion) {
             console.warn('[INTELLIGENCE] Suppressing what-to-say: no resolved interviewer question available.', {
                 explicitQuestion: question,
@@ -949,7 +1003,7 @@ export class IntelligenceEngine extends EventEmitter {
         while (true) {
             const now = Date.now();
             this.pruneCooldownKeys(now);
-            const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+            const cooldownKey = this.buildCooldownKey(cooldownQuestion, imagePaths);
             const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
             const effectiveTriggerCooldown = sourceUtteranceId ? 0 : this.triggerCooldown;
             const cooldownRemaining = Math.max(0, effectiveTriggerCooldown - (now - lastTriggerForKey));
@@ -999,7 +1053,7 @@ export class IntelligenceEngine extends EventEmitter {
         }
 
         const now = Date.now();
-        const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+        const cooldownKey = this.buildCooldownKey(cooldownQuestion, imagePaths);
         const metadataCooldownSuppressedMs = totalCooldownSuppressedMs > 0
             ? totalCooldownSuppressedMs
             : undefined;
@@ -1734,6 +1788,7 @@ export class IntelligenceEngine extends EventEmitter {
                     answerLLM: this.answerLLM,
                     codingProblem: this.session.getCodingProblem(),
                     turnPlan: consciousTurnPlan,
+                    abortSignal: whatToSayAbortController.signal,
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
@@ -2477,9 +2532,59 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousOrchestrator,
       this.consciousContextComposer,
       this.consciousIntentService,
+      undefined,
+      undefined,
+      this.llmHelper,
     );
     this.consciousResponseFingerprinter.clear();
     this.cancelActiveWhatToSay('reset');
+    if (this.assistCancellationToken) {
+      this.assistCancellationToken.abort();
+      this.assistCancellationToken = null;
+    }
+  }
+
+  /**
+   * NAT-CM-AUDIT: called by IntelligenceManager when the user toggles
+   * conscious mode (off→on or on→off). Wipes engine-side conscious-mode
+   * caches that don't live on the session: the orchestrator's topic
+   * compatibility cache and circuit-breaker state, cooldown queues,
+   * response fingerprint history, and any in-flight assist request that
+   * was generated under the previous toggle state.
+   *
+   * Intentionally narrower than `reset()`:
+   *   - leaves `activeMode` alone (mode is independent of conscious toggle)
+   *   - leaves `stealthContainmentActive` alone (containment is independent)
+   *   - leaves `activeAuxiliaryRequestId` alone (auxiliary requests are
+   *     not conscious-mode specific)
+   * This keeps the toggle reset surgical and avoids cascading side effects
+   * into unrelated subsystems.
+   */
+  onConsciousModeToggled(): void {
+    this.lastTriggerByCooldownKey.clear();
+    this.pendingCooldownTriggers.clear();
+    // Rebuild the conscious orchestrator so its topic-compatibility cache,
+    // circuit-breaker counters, and per-orchestrator fingerprinters get a
+    // clean slate. The new instance is wired with the same dependencies as
+    // before, so it's safe to drop in.
+    this.consciousOrchestrator = this.buildConsciousOrchestrator();
+    this.consciousContextComposer = new ConsciousContextComposer();
+    this.consciousIntentService = new ConsciousIntentService();
+    this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
+      this.session,
+      this.consciousOrchestrator,
+      this.consciousContextComposer,
+      this.consciousIntentService,
+      undefined,
+      undefined,
+      this.llmHelper,
+    );
+    this.consciousResponseFingerprinter.clear();
+    // Cancel any in-flight assist so an answer generated under the prior
+    // toggle state can't land after the toggle. We use a dedicated reason
+    // string so latency telemetry can distinguish it from session-switch
+    // cancellations.
+    this.cancelActiveWhatToSay('conscious-mode-toggled');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();
       this.assistCancellationToken = null;

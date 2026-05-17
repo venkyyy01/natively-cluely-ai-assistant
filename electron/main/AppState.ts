@@ -53,6 +53,7 @@ import { RAGManager } from "../rag/RAGManager"
 import { DatabaseManager } from "../db/DatabaseManager"
 import { warmupIntentClassifier } from "../llm"
 import { maybeHandleSuggestionTriggerFromTranscript } from "../ConsciousMode"
+import { DEFAULT_SCREENSHOT_FRESHNESS_MS } from "../coding/screenshotRelevance"
 import { MeetingCheckpointer } from "../MeetingCheckpointer"
 import { STTReconnector } from "../STTReconnector"
 import { CredentialsManager } from "../services/CredentialsManager"
@@ -90,6 +91,22 @@ export class AppState {
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
   private accelerationManager: import('../services/AccelerationManager').AccelerationManager | null = null
+  /**
+   * Single-flight guard for `initializeAccelerationManager()`. The init call
+   * downloads + loads the ANE ONNX model on Apple Silicon, which can take
+   * several seconds. Without this guard, a fast off→on→off→on toggle would
+   * fire multiple parallel inits, leaking the orphaned AccelerationManagers
+   * (each owning a WorkerPool and RuntimeBudgetScheduler) that finished
+   * after the user already settled on a different state.
+   */
+  private accelerationManagerInitInFlight: Promise<void> | null = null
+  /**
+   * Lazily-initialised handle to the macOS permission wizard. Reused across
+   * IPC permission requests, focus re-checks, and revocation broadcasts so
+   * the renderer always sees the same persisted state machine.
+   */
+  private permissionWizardInstance: import('../permissions/PermissionWizard').PermissionWizard | null = null
+  private permissionWizardFocusListener: (() => void) | null = null
   private readonly performanceInstrumentation: PerformanceInstrumentation
   private readonly runtimeCoordinator: RuntimeCoordinator
 
@@ -446,6 +463,26 @@ keybindManager.onShortcutTriggered(async (actionId) => {
           if (mainWindow) {
             mainWindow.webContents.send('global-shortcut-action', actionId);
           }
+        } else if (actionId === 'general:toggle-cursor-hook') {
+          // NAT-CURSOR-SHORTCUT: Toggle the software cursor / cursor freeze
+          // hook via Cmd+Shift+\. Mirrors the Settings toggle behaviour:
+          // persists the choice, broadcasts status to all renderers.
+          const helper = this.getWindowHelper();
+          const newState = !helper.isCursorHookRequested();
+          const installed = helper.setCursorHookEnabled(newState);
+          try {
+            SettingsManager.getInstance().set('cursorHookEnabled', newState);
+          } catch (err) {
+            console.warn('[Main] Failed to persist cursorHookEnabled:', err);
+          }
+          // Broadcast to all renderers (overlay SyntheticCursor + Settings UI)
+          const status = { enabled: newState, installed };
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send('cursor-hook-status', status);
+            }
+          }
+          console.log(`[Main] Cursor hook toggled via shortcut: enabled=${newState}, installed=${installed}`);
         }
       } catch (e: any) {
         if (e.message !== "Selection cancelled") {
@@ -1103,26 +1140,46 @@ console.error('[AppState] Failed to initialize RAGManager:', error);
 }
 
 private async initializeAccelerationManager(): Promise<void> {
-try {
-const { AccelerationManager } = await import('../services/AccelerationManager');
-const accelerationManager = new AccelerationManager();
-await accelerationManager.initialize();
-this.accelerationManager = accelerationManager;
-if (SettingsManager.getInstance().getAccelerationModeEnabled()) {
-accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
-accelerationManager.activate();
-setActiveAccelerationManager(accelerationManager);
-this.intelligenceManager.attachAccelerationManager(accelerationManager);
-} else {
-accelerationManager.deactivate();
-setActiveAccelerationManager(null);
-this.intelligenceManager.attachAccelerationManager(null);
+// Single-flight guard: collapse concurrent calls into one in-flight init.
+// Safe to await even from the synchronous toggle handler because the
+// caller only cares about the post-init state, not the per-call promise
+// identity.
+if (this.accelerationManagerInitInFlight) {
+  return this.accelerationManagerInitInFlight;
 }
-console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
-} catch (error) {
-this.accelerationManager = null;
-  console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
-}
+
+const initPromise = (async () => {
+  try {
+    const { AccelerationManager } = await import('../services/AccelerationManager');
+    const accelerationManager = new AccelerationManager();
+    await accelerationManager.initialize();
+    // Re-check the desired state AFTER the async init completes. The user
+    // may have toggled acceleration off while the ANE model was loading;
+    // installing the manager into shared state at that point would
+    // resurrect a feature the user just turned off.
+    const desiredEnabled = SettingsManager.getInstance().getAccelerationModeEnabled();
+    this.accelerationManager = accelerationManager;
+    if (desiredEnabled) {
+      accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
+      accelerationManager.activate();
+      setActiveAccelerationManager(accelerationManager);
+      this.intelligenceManager.attachAccelerationManager(accelerationManager);
+    } else {
+      accelerationManager.deactivate();
+      setActiveAccelerationManager(null);
+      this.intelligenceManager.attachAccelerationManager(null);
+    }
+    console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
+  } catch (error) {
+    this.accelerationManager = null;
+    console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+  } finally {
+    this.accelerationManagerInitInFlight = null;
+  }
+})();
+
+this.accelerationManagerInitInFlight = initPromise;
+return initPromise;
 }
 
 private initializeKnowledgeOrchestrator(): void {
@@ -1327,7 +1384,32 @@ try {
 
       // Auto-trigger logic with enhanced debugging
       console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
-      
+
+      // NAT-SCREENSHOT-AUTOATTACH: When conscious mode is on and the user
+      // has queued screenshots before the interviewer asked a question
+      // (e.g. captured a coderpad / editor screen mid-conversation), attach
+      // the queue so the LLM sees the screenshots alongside the live
+      // question. Without this, the auto-trigger answers the audio
+      // question with no visual context — exactly the case where the
+      // user *wants* the screenshot to drive a nuanced response.
+      //
+      // Originally wired in 0833816 ("screenshot wiring and llm cnceled
+      // fix") and lost in a later refactor. Conscious-mode-only so the
+      // fast standard path stays lean for plain interview turns.
+      //
+      // Two safety gates apply downstream:
+      //   1. Recency — only screenshots captured within
+      //      DEFAULT_SCREENSHOT_FRESHNESS_MS are surfaced here, so a
+      //      problem-A screenshot taken minutes ago doesn't bleed into a
+      //      problem-B / behavioral question.
+      //   2. Question shape — `ConsciousMode.triggerFromCandidate` drops
+      //      the imagePaths if the resolved question reads behavioral /
+      //      off-topic. Coding-shaped questions get the attach.
+      const recentScreenshots = this.consciousModeEnabled
+        ? this.screenshotHelper.getRecentScreenshots(DEFAULT_SCREENSHOT_FRESHNESS_MS)
+        : [];
+      const autoTriggerImagePaths = recentScreenshots.length > 0 ? recentScreenshots : undefined;
+
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
         text: segment.text,
@@ -1335,6 +1417,7 @@ try {
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
         intelligenceManager: this.intelligenceManager,
+        imagePaths: autoTriggerImagePaths,
       }).then((triggered) => {
         if (triggered) {
           console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
@@ -2155,6 +2238,10 @@ try {
       this.stopEnforcementLoop()
     }
 
+    // Detach focus-driven permission re-checks before the app starts
+    // unwinding event listeners. Safe no-op if never installed.
+    this.removePermissionFocusListener()
+
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
     this.meetingLifecycleState = 'idle'
@@ -2815,6 +2902,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   // Screenshot management methods
   public async takeScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
+    if (this.isStealthContainmentActive()) {
+      throw new Error("CONTAINMENT_ACTIVE")
+    }
 
     this.stealthManager.pauseWatchdog('screenshot')
 
@@ -2838,6 +2928,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
   public async takeSelectiveScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
+    if (this.isStealthContainmentActive()) {
+      throw new Error("CONTAINMENT_ACTIVE")
+    }
 
     this.stealthManager.pauseWatchdog('selective-screenshot')
 
@@ -3289,6 +3382,17 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         this.settingsWindowHelper.closeWindow();
         this.modelSelectorWindowHelper.hideWindow();
         app.dock.hide();
+        // BLUR-PROOF (macOS Phase 2): when invisible mode is on, switch the
+        // activation policy to 'accessory'. An accessory app cannot become
+        // the active GUI app — even if some code path slips and calls
+        // [NSApp activate], the OS refuses to bring Natively to foreground.
+        // This belt-and-braces guarantees the underlying browser keeps
+        // key-window status no matter what the renderer or Electron does.
+        try {
+          app.setActivationPolicy?.('accessory');
+        } catch (err) {
+          console.warn('[Stealth] setActivationPolicy(accessory) failed:', err);
+        }
         this.hideTray();
 
         // Focus the window directly without calling .show() 
@@ -3299,6 +3403,14 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       } else {
         console.log('[Stealth] Calling app.dock.show()');
         app.dock.show();
+        // BLUR-PROOF (macOS Phase 2): restore normal activation policy when
+        // leaving invisible mode so the user can interact with menus,
+        // settings windows, IME, etc. as usual.
+        try {
+          app.setActivationPolicy?.('regular');
+        } catch (err) {
+          console.warn('[Stealth] setActivationPolicy(regular) failed:', err);
+        }
         this.showTray();
 
         // Restore focus when coming back to foreground/dock mode
@@ -3766,6 +3878,71 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
 
   public getAccelerationModeEnabled(): boolean {
   return SettingsManager.getInstance().getAccelerationModeEnabled()
+  }
+
+  /**
+   * Lazily get the singleton PermissionWizard. Created on first request so
+   * `app.getPath('userData')` is available (the wizard's state file lives
+   * there). Reused for IPC, focus re-checks, and revocation broadcasts.
+   */
+  public getPermissionWizard(): import('../permissions/PermissionWizard').PermissionWizard {
+    if (!this.permissionWizardInstance) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createPermissionWizard } = require('../permissions/PermissionWizard') as typeof import('../permissions/PermissionWizard');
+      this.permissionWizardInstance = createPermissionWizard();
+    }
+    return this.permissionWizardInstance;
+  }
+
+  /**
+   * Re-check all permissions and broadcast the result to every renderer.
+   * Designed to be safe to call from a focus event — saves to disk only
+   * when state actually changed.
+   *
+   * Triggered by the focus listener installed in `bootstrap.ts` so a user
+   * who flips a permission in System Settings while the app is running
+   * sees the feature come online without restarting.
+   */
+  public refreshPermissionState(): void {
+    if (process.platform !== 'darwin') {
+      // Other platforms have no runtime-recheckable TCC equivalent.
+      return;
+    }
+    try {
+      const snapshot = this.getPermissionWizard().checkAndUpdate();
+      this._broadcastToAllWindows('permissions:state-changed', snapshot);
+    } catch (err) {
+      console.warn('[AppState] refreshPermissionState failed:', err);
+    }
+  }
+
+  /**
+   * Install a `browser-window-focus` listener that re-checks permissions
+   * whenever the app regains focus. Called once during bootstrap. Stores
+   * the listener handle so `cleanupForQuit` can detach it.
+   */
+  public installPermissionFocusListener(): void {
+    if (this.permissionWizardFocusListener) {
+      return;
+    }
+    if (process.platform !== 'darwin') {
+      return;
+    }
+    const listener = () => {
+      this.refreshPermissionState();
+    };
+    this.permissionWizardFocusListener = listener;
+    app.on('browser-window-focus', listener);
+  }
+
+  private removePermissionFocusListener(): void {
+    if (!this.permissionWizardFocusListener) return;
+    try {
+      app.removeListener('browser-window-focus', this.permissionWizardFocusListener);
+    } catch {
+      // ignore — process may already be tearing down
+    }
+    this.permissionWizardFocusListener = null;
   }
 
   public getPrivacyShieldState(): PrivacyShieldState {

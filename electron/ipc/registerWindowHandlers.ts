@@ -112,6 +112,61 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     },
   );
 
+  safeHandleValidated(
+    'set-overlay-interactive',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-interactive')] as const,
+    async (_event, enabled) => {
+      // BLUR-PROOF: routed straight to the WindowHelper. The renderer flips
+      // this on input focus/blur so the overlay only takes native foreground
+      // when the user is actively typing. Default state stays non-activating.
+      appState.getWindowHelper().setOverlayInteractive(enabled);
+      return ok({ enabled });
+    },
+  );
+
+  safeHandleValidated(
+    'set-cursor-hook',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-cursor-hook')] as const,
+    async (_event, enabled) => {
+      // CURSOR-FREEZE: enable/disable the platform cursor freeze hook
+      // (CGEventTap on macOS, WH_MOUSE_LL on Windows). Returns whether
+      // the hook is now active so the renderer can show a permission-
+      // needed UI when Accessibility is denied. Persists the user's
+      // choice so the next launch boots in the same state.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(enabled);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { SettingsManager } = require('../services/SettingsManager');
+        SettingsManager.getInstance().set('cursorHookEnabled', enabled);
+      } catch (err) {
+        console.warn('[ipc] failed to persist cursorHookEnabled:', err);
+      }
+      // Broadcast the new status to all renderers so the overlay's
+      // SyntheticCursor and the Settings UI both pick up the change.
+      const status = { enabled, installed };
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const electron = require('electron');
+        for (const win of electron.BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('cursor-hook-status', status);
+          }
+        }
+      } catch (err) {
+        console.warn('[ipc] failed to broadcast cursor-hook-status:', err);
+      }
+      return ok(status);
+    },
+  );
+
+  safeHandle('get-cursor-hook-status', async () => {
+    const helper = appState.getWindowHelper();
+    return ok({
+      enabled: helper.isCursorHookRequested(),
+      installed: helper.isCursorHookEnabled(),
+    });
+  });
+
   safeHandle('toggle-window', async () => {
     const windowFacade = getWindowFacade(appState);
     if (windowFacade) {

@@ -26,7 +26,7 @@ export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './Sessio
 export type { IntelligenceMode, IntelligenceModeEvents } from './IntelligenceEngine';
 export type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
-export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
+export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite";
 
 /**
  * IntelligenceManager - Facade for the intelligence layer.
@@ -145,7 +145,20 @@ export class IntelligenceManager extends EventEmitter {
     }
 
     setConsciousModeEnabled(enabled: boolean): void {
+        // NAT-CM-AUDIT: idempotent — only act when the value actually changes.
+        const previous = this.session.isConsciousModeEnabled();
         this.session.setConsciousModeEnabled(enabled);
+        if (previous === enabled) {
+            return;
+        }
+        // NAT-CM-AUDIT: cascade the toggle into the engine so its internal
+        // conscious-mode caches (orchestrator state, cooldown queues, fingerprint
+        // history, in-flight assist) are cleared too. Without this, a prior
+        // screenshot-extracted coding problem can keep biasing answers toward
+        // A/B/C/D structure even after the user toggles conscious mode off and
+        // back on. The session-level reset alone isn't sufficient because the
+        // engine holds derived state.
+        this.engine.onConsciousModeToggled();
     }
 
     cancelActiveWhatToSay(reason?: string): void {

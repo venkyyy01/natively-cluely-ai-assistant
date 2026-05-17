@@ -53,13 +53,18 @@ describe('FlexibleResponseRouter', () => {
     assert.strictEqual(plan.shouldBypassConscious, false);
   });
 
-  it('routes clarification turns through relaxed verification', () => {
+  it('routes clarification turns through moderate verification (provenance ON, judge OFF)', () => {
+    // NAT-CM-AUDIT: clarification answers commonly introduce new specifics
+    // ("by 'cache' I mean Redis with TTL=60s") that need grounding. The gate
+    // upgraded clarification from relaxed to moderate to keep these grounded
+    // while skipping the LLM judge for latency.
     const plan = router.plan({
       utterance: 'What do you mean?',
       options: { enabled: true },
     });
     assert.strictEqual(plan.conversationKind, 'clarification');
-    assert.strictEqual(plan.verification.runProvenance, false);
+    assert.strictEqual(plan.verificationLevel, 'moderate');
+    assert.strictEqual(plan.verification.runProvenance, true);
     assert.strictEqual(plan.verification.runJudge, false);
   });
 

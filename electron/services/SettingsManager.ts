@@ -14,6 +14,12 @@ enablePrivateMacosStealthApi?: boolean;
 enableCaptureDetectionWatchdog?: boolean;
 enableVirtualDisplayIsolation?: boolean;
 captureToolPatterns?: string[];
+// Cursor stealth: when true, the OS hardware cursor is frozen at the
+// overlay boundary by a low-level cursor hook (CGEventTap on macOS,
+// WH_MOUSE_LL on Windows) and the renderer paints a software cursor
+// inside the capture-excluded overlay window. Off by default — first
+// activation triggers the OS Accessibility prompt on macOS.
+cursorHookEnabled?: boolean;
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
@@ -48,6 +54,10 @@ if (typeof raw.accelerationModeEnabled === 'boolean') {
 
   if (typeof raw.enableVirtualDisplayIsolation === 'boolean') {
     sanitized.enableVirtualDisplayIsolation = raw.enableVirtualDisplayIsolation;
+  }
+
+  if (typeof raw.cursorHookEnabled === 'boolean') {
+    sanitized.cursorHookEnabled = raw.cursorHookEnabled;
   }
 
   if (Array.isArray(raw.captureToolPatterns)) {

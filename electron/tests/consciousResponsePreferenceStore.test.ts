@@ -42,7 +42,14 @@ test('ConsciousAnswerPlanner tightens system design answers when hard concise vo
   });
 
   assert.equal(plan.questionMode, 'system_design');
-  assert.ok(plan.maxWords <= 60);
+  // NAT-CM-AUDIT: concise preference still shrinks the budget meaningfully
+  // (down from the fresh-design 220 default) but never below the 120-word floor
+  // that a credible system-design answer needs. This replaces the prior
+  // 60-word cap which was too tight for actual system-design interviews.
+  assert.ok(
+    plan.maxWords < 220 && plan.maxWords >= 120,
+    `expected concise system-design budget in [120, 220), got ${plan.maxWords}`,
+  );
   assert.match(plan.groundingHint, /first person/i);
   assert.match(plan.groundingHint, /simple words|avoid jargon/i);
   assert.match(plan.rationale, /user preference/i);

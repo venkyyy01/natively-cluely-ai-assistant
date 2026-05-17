@@ -1,6 +1,7 @@
 import { InterviewerUtteranceBuffer, type BufferedUtterance } from './buffering/InterviewerUtteranceBuffer';
 import { getOptimizationFlags } from './config/optimizations';
 import { getDefaultTriggerAuditLog, TriggerAuditLog, type TriggerDecisionCohort, type TriggerDecisionReasonCode } from './observability/TriggerAuditLog';
+import { shouldAutoAttachScreenshotsForQuestion } from './coding/screenshotRelevance';
 
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
 
@@ -251,6 +252,7 @@ export interface TranscriptSuggestionIntelligenceManager {
     lastQuestion: string;
     confidence: number;
     sourceUtteranceId?: string;
+    imagePaths?: string[];
   }): Promise<void>;
 }
 
@@ -263,6 +265,14 @@ export interface TranscriptSuggestionInput {
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
   utteranceBuffer?: InterviewerUtteranceBuffer;
   triggerAuditLog?: TriggerAuditLog;
+  /**
+   * NAT-SCREENSHOT-AUTOATTACH: Screenshots queued before the interviewer
+   * spoke. Forwarded into the suggestion trigger so the LLM sees both
+   * the audio question and the visual context (e.g. user pre-captured a
+   * coderpad before the question landed). Conscious-mode wiring lives
+   * in `AppState.transcriptHandler`.
+   */
+  imagePaths?: string[];
 }
 
 const defaultInterviewerUtteranceBuffer = new InterviewerUtteranceBuffer();
@@ -949,11 +959,29 @@ async function triggerFromCandidate(input: TranscriptSuggestionInput, candidate:
       cohort: candidate.cohort,
     });
 
+    // NAT-SCREENSHOT-RELEVANCE: Gate auto-attach by question shape.
+    // Recency was already filtered upstream in `AppState` via
+    // `getRecentScreenshots`; here we guard against attaching even
+    // a fresh screenshot to a behavioral / off-topic transcript turn,
+    // which produces a confidently-wrong answer ("tell me about a
+    // time" + a Two Sum image is the canonical failure mode).
+    const candidateImagePaths = input.imagePaths && input.imagePaths.length > 0 ? input.imagePaths : undefined;
+    const attachImages = candidateImagePaths
+      ? shouldAutoAttachScreenshotsForQuestion(decision.lastQuestion)
+      : false;
+    if (candidateImagePaths && !attachImages) {
+      console.log('[AUTO-TRIGGER] 🖼️  Suppressing screenshot auto-attach: question is not coding-shaped', {
+        lastQuestion: decision.lastQuestion.substring(0, 80) + (decision.lastQuestion.length > 80 ? '...' : ''),
+        queuedImages: candidateImagePaths.length,
+      });
+    }
+
     const trigger = {
       context,
       lastQuestion: decision.lastQuestion,
       confidence: input.confidence ?? 0.8,
       ...(candidate.sourceUtteranceId ? { sourceUtteranceId: candidate.sourceUtteranceId } : {}),
+      ...(attachImages && candidateImagePaths ? { imagePaths: candidateImagePaths } : {}),
     };
     await input.intelligenceManager.handleSuggestionTrigger(trigger);
 

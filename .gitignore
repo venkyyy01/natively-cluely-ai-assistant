@@ -18,6 +18,9 @@ lerna-debug.log*
 *.json
 .codex
 .github
+.make
+.onnx
+.bin
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -217,3 +220,7 @@ electron/llm/training/intent_dataset.json
 # Note: *.bin intentionally NOT globally ignored — many native-module artifacts use it.
 # Add specific .bin paths here if a new training output appears.
 scripts/finetune-intent/**/*.bin
+# Already-tracked large binary files kept locally for builds but hidden from git worktree
+resources/models/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx
+resources/models/Xenova/mobilebert-uncased-mnli/onnx/model_quantized.onnx
+stealth-projects/windows-protected-render-host/build/CMakeFiles/**/*.bin

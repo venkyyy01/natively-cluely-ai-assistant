@@ -536,16 +536,45 @@ export class SessionTracker {
   }
 
   setConsciousModeEnabled(enabled: boolean): void {
-    this.consciousModeEnabled = enabled;
-    if (!enabled) {
-      this.consciousThreadStore.reset();
-      this.observedQuestionStore.reset();
-      this.answerHypothesisStore.reset();
-      this.responsePreferenceStore.reset();
-      this.designStateStore.reset();
-      this.consciousSemanticContext = '';
-      persistState(this);
+    // NAT-CM-AUDIT: idempotent — same value is a no-op so a stray duplicate
+    // toggle from the renderer doesn't blow away state.
+    if (this.consciousModeEnabled === enabled) {
+      return;
     }
+    this.consciousModeEnabled = enabled;
+
+    // NAT-CM-AUDIT: full conscious-state wipe on EVERY transition (off→on AND
+    // on→off). Previously the OFF path cleared most stores but missed:
+    //   - `_codingProblem` (screenshot-extracted coding problem leaks across
+    //     toggles, so a prior coding screenshot still steers the next answer
+    //     toward A/B/C/D structure even when the user expects normal Q&A)
+    //   - `phaseDetector` (interview phase polluted from prior session)
+    //   - `threadDirector` reasoning thread (cleared via dedicated path)
+    //   - `tokenBudgetManager` allocations
+    //   - `adaptiveContextWindow` cached state
+    //   - response fingerprinter (prior answers blocking legitimate retries)
+    // Doing the wipe on ON as well guarantees a clean start regardless of
+    // whether OFF was reached cleanly. The transcript/audio context is
+    // preserved since it's session-level, not conscious-mode-level.
+    if (this.threadDirector) {
+      this.threadDirector.resetThread('toggle_conscious_mode');
+    } else {
+      this.consciousThreadStore.reset();
+    }
+    this.observedQuestionStore.reset();
+    this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
+    this.designStateStore.reset();
+    this.consciousSemanticContext = '';
+    this._codingProblem = null;
+    this.phaseDetector.reset();
+    this.tokenBudgetManager.reset();
+    this.adaptiveContextWindow = null;
+    this.fingerprinter.clear();
+    this.contextAssembleCache.clear();
+    this.compactSnapshotCache.clear();
+
+    persistState(this);
   }
 
   isConsciousModeEnabled(): boolean {
@@ -692,6 +721,26 @@ export class SessionTracker {
     for (let i = contextItems.length - 1; i >= 0; i--) {
       if (contextItems[i].role === 'interviewer') {
         return contextItems[i].text;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get the last interviewer turn with timestamp metadata.
+   *
+   * NAT-SCREENSHOT-FRESHNESS: Used by `IntelligenceEngine.runWhatShouldISay`
+   * to decide whether the most recent transcript question is fresh enough
+   * to pair with a just-taken screenshot, or whether the screenshot
+   * should drive its own synthetic prompt. Without this, screenshots
+   * silently inherit stale questions and the LLM answers the wrong thing.
+   */
+  getLastInterviewerTurnWithMeta(): { text: string; timestamp: number } | null {
+    const contextItems = this.getContextItems();
+    for (let i = contextItems.length - 1; i >= 0; i--) {
+      const item = contextItems[i];
+      if (item.role === 'interviewer') {
+        return { text: item.text, timestamp: item.timestamp };
       }
     }
     return null;

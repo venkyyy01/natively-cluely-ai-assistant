@@ -13,8 +13,8 @@ import fs from "fs";
 /** Default timeout for LLM API calls in milliseconds */
 const LLM_API_TIMEOUT_MS = 30000;
 const CURL_PROVIDER_TIMEOUT_MS = 60000;
-const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
-const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
+const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite";
+const GEMINI_PRO_MODEL = "gemini-3.1-pro";
 const MAX_OUTPUT_TOKENS = 8192;
 
 /**

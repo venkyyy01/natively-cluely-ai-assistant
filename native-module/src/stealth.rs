@@ -669,10 +669,9 @@ mod windows_impl {
         PROCESSENTRY32,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowDisplayAffinity, GetWindowLongPtrW, SetWindowDisplayAffinity,
-        SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WDA_MONITOR, WDA_NONE,
-        WINDOW_DISPLAY_AFFINITY, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+        GetWindowDisplayAffinity, GetWindowLongPtrW, SetWindowDisplayAffinity, SetWindowLongPtrW,
+        GWL_EXSTYLE, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
@@ -726,6 +725,76 @@ mod windows_impl {
         }
 
         Ok(-1)
+    }
+
+    /// Apply `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` to the overlay HWND so
+    /// clicking it does NOT promote the Electron app to foreground. This is
+    /// the Windows analogue of macOS's NSPanel non-activating window — it
+    /// prevents the underlying browser from receiving WM_ACTIVATEAPP or a
+    /// `blur` event when the user interacts with the overlay.
+    ///
+    /// Idempotent: re-applying the bits is a no-op. Returns Ok if the bits
+    /// were already set or were applied successfully.
+    pub fn set_no_activate(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+
+        unsafe {
+            // Reset Win32 last-error so we can disambiguate "0 because of
+            // error" from "0 because the existing style was 0".
+            let _ = GetLastError();
+            let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let target = current
+                | (WS_EX_NOACTIVATE.0 as isize)
+                | (WS_EX_TOOLWINDOW.0 as isize);
+
+            if current == target {
+                return Ok(());
+            }
+
+            let prev = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
+            if prev == 0 {
+                let error = GetLastError();
+                if error.0 != 0 {
+                    return Err(napi::Error::from_reason(format!(
+                        "SetWindowLongPtrW(GWL_EXSTYLE) failed: {:?}",
+                        error
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` from the overlay HWND.
+    /// Used when the overlay needs to receive native focus on demand
+    /// (e.g. typing into an input field), and when stealth mode is disabled.
+    pub fn clear_no_activate(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+
+        unsafe {
+            let _ = GetLastError();
+            let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let mask = !((WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize));
+            let target = current & mask;
+
+            if current == target {
+                return Ok(());
+            }
+
+            let prev = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
+            if prev == 0 {
+                let error = GetLastError();
+                if error.0 != 0 {
+                    return Err(napi::Error::from_reason(format!(
+                        "SetWindowLongPtrW(GWL_EXSTYLE) failed: {:?}",
+                        error
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn hwnd_from_buffer(buffer: &Buffer) -> napi::Result<HWND> {
@@ -933,28 +1002,12 @@ mod windows_impl {
         Ok(-1)
     }
 
-    pub fn apply_alt_tab_exclusion(_hwnd_buffer: Buffer) -> napi::Result<()> {
+    pub fn set_no_activate(_hwnd_buffer: Buffer) -> napi::Result<()> {
         Ok(())
     }
 
-    pub fn remove_alt_tab_exclusion(_hwnd_buffer: Buffer) -> napi::Result<()> {
+    pub fn clear_no_activate(_hwnd_buffer: Buffer) -> napi::Result<()> {
         Ok(())
-    }
-
-    pub fn apply_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<()> {
-        Ok(())
-    }
-
-    pub fn remove_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<()> {
-        Ok(())
-    }
-
-    pub fn verify_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<bool> {
-        Ok(false)
-    }
-
-    pub fn is_capture_protected(_hwnd_buffer: Buffer) -> napi::Result<bool> {
-        Ok(false)
     }
 
     #[allow(dead_code)]
@@ -1035,46 +1088,27 @@ pub fn verify_windows_stealth_state(hwnd_buffer: Buffer) -> napi::Result<i32> {
     windows_impl::verify(hwnd_buffer)
 }
 
-/// Windows: hide the window from Alt-Tab via WS_EX_TOOLWINDOW.
-/// On non-Windows this is a no-op.
+/// Apply the WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW extended window styles to
+/// a Windows HWND. Prevents the OS from promoting the window to foreground
+/// on click — the analogue of macOS's NSPanel non-activating panel. Used by
+/// the overlay window to avoid sending `blur` events to the focused browser
+/// tab when the user interacts with the overlay.
+///
+/// On non-Windows platforms this is a no-op.
 #[napi]
-pub fn apply_windows_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
-    windows_impl::apply_alt_tab_exclusion(hwnd_buffer)
+pub fn apply_windows_no_activate(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::set_no_activate(hwnd_buffer)
 }
 
-/// Windows: restore Alt-Tab visibility (clear WS_EX_TOOLWINDOW, set WS_EX_APPWINDOW).
-/// On non-Windows this is a no-op.
+/// Reverse of `apply_windows_no_activate`. Restores the ability of the
+/// window to receive native foreground activation. Called when stealth
+/// mode is disabled or when the overlay needs to receive native focus on
+/// demand (e.g. while typing into an input field).
+///
+/// On non-Windows platforms this is a no-op.
 #[napi]
-pub fn remove_windows_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
-    windows_impl::remove_alt_tab_exclusion(hwnd_buffer)
-}
-
-/// Windows: cloak the window from DWM composition (DWMWA_CLOAK).
-/// Adds a second layer over SetWindowDisplayAffinity. No-op on non-Windows.
-#[napi]
-pub fn apply_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
-    windows_impl::apply_dwm_cloak(hwnd_buffer)
-}
-
-/// Windows: uncloak the window from DWM composition.
-/// No-op on non-Windows.
-#[napi]
-pub fn remove_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
-    windows_impl::remove_dwm_cloak(hwnd_buffer)
-}
-
-/// Windows: returns true if the window is currently DWM-cloaked.
-/// On non-Windows always returns false.
-#[napi]
-pub fn verify_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<bool> {
-    windows_impl::verify_dwm_cloak(hwnd_buffer)
-}
-
-/// Windows: returns true if the window's display affinity is currently
-/// WDA_EXCLUDEFROMCAPTURE. Used by the enforcement loop on the TS side.
-#[napi]
-pub fn is_windows_capture_protected(hwnd_buffer: Buffer) -> napi::Result<bool> {
-    windows_impl::is_capture_protected(hwnd_buffer)
+pub fn clear_windows_no_activate(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::clear_no_activate(hwnd_buffer)
 }
 
 // ============================================================================

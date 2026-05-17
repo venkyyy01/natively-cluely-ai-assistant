@@ -36,6 +36,8 @@ const FEATURES: string[] = [
     'On-the-fly AI help: what to say, follow-ups, recap, and instant answers',
     'Local meeting memory (RAG) with on-device embeddings and search',
     'Calendar-aware context when you connect Google Calendar',
+    'Native OCR cascade — Apple Vision on macOS, Windows OCR on Windows, Tesseract.js elsewhere',
+    'Screenshot-aware answering with multi-image fallback for text-only models',
     'Stealth controls: hide from dock, disguise the window, and privacy-minded capture behavior',
     'Bring your own API keys for cloud models; Ollama supported for local inference',
 ];
@@ -152,8 +154,22 @@ export const AboutSection: React.FC<AboutSectionProps> = ({ setActiveTab }) => {
             </div>
 
             <div>
-                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">What&apos;s New in v2.0</h4>
+                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">What&apos;s New in v{appVersion}</h4>
                 <div className="bg-bg-item-surface rounded-xl border border-border-subtle overflow-hidden">
+                    <div className="p-3 border-b border-border-subtle bg-bg-card/50">
+                        <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-lg bg-cyan-500/10 flex items-center justify-center text-cyan-400 shrink-0">
+                                <Cpu size={20} />
+                            </div>
+                            <div>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">Native OCR Cascade</h5>
+                                <p className="text-xs text-text-secondary leading-relaxed">
+                                    Screenshot-to-text now goes through Apple Vision on macOS and Windows.Media.Ocr on Windows for ~50× lower latency. Tesseract.js stays as the universal Linux fallback. Every step has a per-image timeout so a stuck OCR call can&apos;t stall the LLM lane.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="p-3 border-b border-border-subtle bg-bg-card/50">
                         <div className="flex items-start gap-4">
                             <div className="w-10 h-10 rounded-lg bg-yellow-500/10 flex items-center justify-center text-yellow-400 shrink-0">

@@ -4,6 +4,7 @@ import type { AnswerRoute } from '../latency/AnswerLatencyTracker';
 import type { ContextItem, TranscriptSegment } from '../SessionTracker';
 import type { PreparedConsciousRoute } from './ConsciousOrchestrator';
 import { ConsciousAnswerPlanner, type ConsciousAnswerPlan } from './ConsciousAnswerPlanner';
+import { SemanticQuestionClassifier, type SemanticQuestionClassification } from './SemanticQuestionClassifier';
 import { ConsciousContextComposer } from './ConsciousContextComposer';
 import { ConsciousIntentService, type ResolvedIntentResult } from './ConsciousIntentService';
 import { ConsciousOrchestrator } from './ConsciousOrchestrator';
@@ -33,6 +34,9 @@ interface SessionLike {
   getLatestAnswerHypothesis(): AnswerHypothesis | null;
   getConsciousResponsePreferenceContext(questionMode: ConsciousResponseQuestionMode): string;
   getConsciousResponsePreferenceSummary(questionMode: ConsciousResponseQuestionMode): ConsciousPlannerPreferenceSummary;
+  /** NAT-CM-AUDIT: optional phase signal for the planner. Implementations
+   * without phase tracking can omit this; the planner falls back to defaults. */
+  getCurrentPhase?(): 'requirements_gathering' | 'high_level_design' | 'deep_dive' | 'implementation' | 'complexity_analysis' | 'scaling_discussion' | 'failure_handling' | 'behavioral_story' | 'wrap_up';
 }
 
 interface KnowledgeStatusLike {
@@ -62,6 +66,7 @@ export class ConsciousPreparationCoordinator {
   private readonly semanticFactStore: ConsciousSemanticFactStore;
   private readonly tokenCounter: TokenCounter;
   private readonly tokenBudgetManager: TokenBudgetManager;
+  private readonly semanticClassifier: SemanticQuestionClassifier | null;
 
   constructor(
     private readonly session: SessionLike,
@@ -70,12 +75,65 @@ export class ConsciousPreparationCoordinator {
     private readonly consciousIntentService: ConsciousIntentService,
     tokenCounter?: TokenCounter,
     tokenBudgetManager?: TokenBudgetManager,
+    /**
+     * NAT-CM-AUDIT: optional structured-LLM client used by the semantic
+     * question classifier. When provided, ambiguous regex classifications
+     * (typically `general` mode) get a semantic second pass with a tight
+     * timeout so phrasings the regex doesn't catch still land on the right
+     * answer shape. Null/undefined disables the feature; callers that don't
+     * have an LLM client at construction time fall back to regex-only.
+     */
+    structuredClient?: { generateContentStructured(message: string): Promise<string>; hasStructuredGenerationCapability?(): boolean } | null,
   ) {
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
     this.answerPlanner = new ConsciousAnswerPlanner();
     this.semanticFactStore = new ConsciousSemanticFactStore();
     this.tokenCounter = tokenCounter ?? new TokenCounter('openai');
     this.tokenBudgetManager = tokenBudgetManager ?? new TokenBudgetManager('openai');
+    this.semanticClassifier = structuredClient
+      ? new SemanticQuestionClassifier(structuredClient)
+      : null;
+  }
+
+  /**
+   * NAT-CM-AUDIT: ask the semantic classifier when regex was uninformative.
+   * Returns null when no client is configured, on timeout, or on parse
+   * failure. Bounded latency: ~600ms, cached per (question, threadHint).
+   */
+  private async maybeSemanticClassify(input: {
+    question: string;
+    regexQuestionMode: ConsciousResponseQuestionMode;
+    activeThread: ReasoningThread | null;
+  }): Promise<SemanticQuestionClassification | null> {
+    if (!this.semanticClassifier) return null;
+    if (!input.question || input.question.trim().length < 4) return null;
+    // Only invoke when regex was uninformative. Regex is good at obvious
+    // signals (live_coding keywords, behavioral markers); the classifier's
+    // value is in catching paraphrases that fall through to `general`.
+    if (input.regexQuestionMode !== 'general') return null;
+
+    const threadHint = input.activeThread
+      ? [
+          input.activeThread.rootQuestion,
+          input.activeThread.lastQuestion,
+        ].filter(Boolean).join(' | ')
+      : undefined;
+
+    try {
+      const result = await this.semanticClassifier.classify({
+        question: input.question,
+        threadHint,
+      });
+      // Only trust confident, non-`general` overrides. A `general` verdict
+      // from the LLM matches regex, so there's nothing to override.
+      if (!result || result.questionMode === 'general' || result.confidence < 0.7) {
+        return null;
+      }
+      return result;
+    } catch (err) {
+      console.warn('[ConsciousPreparation] Semantic classifier failed (non-fatal):', err);
+      return null;
+    }
   }
 
   private buildEvidenceContextBlock(input: {
@@ -265,14 +323,54 @@ export class ConsciousPreparationCoordinator {
     const longMemoryBlock = this.session.getConsciousLongMemoryContext(planningQuestion);
     const reaction = this.session.getLatestQuestionReaction();
     const hypothesis = this.session.getLatestAnswerHypothesis();
-    let preferenceSummary = this.session.getConsciousResponsePreferenceSummary(detectConsciousQuestionMode(planningQuestion));
+    // NAT-CM-AUDIT: lift thread + phase signals once and feed them into every
+    // planner call below. Fresh designs need room; probes stay tight.
+    const activeThread = this.session.getActiveReasoningThread();
+    const threadFollowUpCount = activeThread?.followUpCount ?? 0;
+    const interviewPhase = typeof this.session.getCurrentPhase === 'function'
+      ? this.session.getCurrentPhase()
+      : undefined;
+
+    // NAT-CM-AUDIT: when regex maps the question to `general` mode, ask the
+    // semantic classifier (LLM with tight timeout, cached) for a second
+    // opinion. This catches phrasings regex misses — "walk me through how
+    // you'd structure X", "take me through your thinking on Y" — and lands
+    // them on system_design / behavioral / live_coding instead of letting
+    // the planner default to a thin "direct_answer".
+    const regexQuestionMode = detectConsciousQuestionMode(planningQuestion);
+    const semanticOverride = await this.maybeSemanticClassify({
+      question: planningQuestion,
+      regexQuestionMode,
+      activeThread,
+    });
+    const overrideQuestionMode = semanticOverride?.questionMode ?? null;
+    // NAT-CM-AUDIT: synthesize an IntentResult from the semantic override so
+    // the planner picks up the new mode through its existing strong-intent
+    // path. Live coding maps to 'coding', system design to 'deep_dive', and
+    // behavioral stays 'behavioral'. Confidence is taken from the classifier.
+    const semanticIntentOverride: IntentResult | null = overrideQuestionMode
+      ? {
+          intent: overrideQuestionMode === 'live_coding' ? 'coding'
+            : overrideQuestionMode === 'system_design' ? 'deep_dive'
+            : overrideQuestionMode === 'behavioral' ? 'behavioral'
+            : 'general',
+          confidence: semanticOverride!.confidence,
+          answerShape: semanticOverride!.reason || '',
+        }
+      : null;
+    let preferenceSummary = this.session.getConsciousResponsePreferenceSummary(overrideQuestionMode ?? regexQuestionMode);
     let answerPlan = this.answerPlanner.plan({
       question: planningQuestion,
       reaction,
       hypothesis,
       preferenceSummary,
-      intentResult: input.prefetchedIntent ?? null,
+      // NAT-CM-AUDIT: prefer real prefetched intent; fall back to the semantic
+      // override so paraphrased system-design / behavioral / live-coding
+      // questions still land on the right answer shape even when prefetch missed.
+      intentResult: input.prefetchedIntent ?? semanticIntentOverride ?? null,
       forceLiveCoding: input.screenshotBackedLiveCodingTurn,
+      threadFollowUpCount,
+      interviewPhase,
     });
     if (answerPlan.questionMode !== detectConsciousQuestionMode(planningQuestion)) {
       preferenceSummary = this.session.getConsciousResponsePreferenceSummary(answerPlan.questionMode);
@@ -281,8 +379,10 @@ export class ConsciousPreparationCoordinator {
         reaction,
         hypothesis,
         preferenceSummary,
-        intentResult: input.prefetchedIntent ?? null,
+        intentResult: input.prefetchedIntent ?? semanticIntentOverride ?? null,
         forceLiveCoding: input.screenshotBackedLiveCodingTurn,
+        threadFollowUpCount,
+        interviewPhase,
       });
     }
     const semanticBlock = this.semanticFactStore.buildContextBlock({
@@ -329,6 +429,8 @@ export class ConsciousPreparationCoordinator {
       preferenceSummary: resolvedPreferenceSummary,
       intentResult,
       forceLiveCoding: input.screenshotBackedLiveCodingTurn,
+      threadFollowUpCount,
+      interviewPhase,
     });
     if (resolvedAnswerPlan.questionMode !== answerPlan.questionMode) {
       resolvedPreferenceSummary = this.session.getConsciousResponsePreferenceSummary(resolvedAnswerPlan.questionMode);
@@ -339,6 +441,8 @@ export class ConsciousPreparationCoordinator {
         preferenceSummary: resolvedPreferenceSummary,
         intentResult,
         forceLiveCoding: input.screenshotBackedLiveCodingTurn,
+        threadFollowUpCount,
+        interviewPhase,
       });
     }
     if (this.shouldRebuildPreparedTranscript(answerPlan, resolvedAnswerPlan)) {

@@ -85,9 +85,14 @@ describe('HumanLikeConversationEngine', () => {
     assert.strictEqual(ack.verificationLevel, 'skip');
   });
 
-  it('recommends relaxed verification for clarification and refinement', () => {
+  it('recommends moderate verification for clarification (provenance ON, judge OFF)', () => {
+    // NAT-CM-AUDIT: clarification commonly introduces new specifics that
+    // need grounding; upgraded from relaxed to moderate.
     const clar = engine.classify('What do you mean?');
-    assert.strictEqual(clar.verificationLevel, 'relaxed');
+    assert.strictEqual(clar.verificationLevel, 'moderate');
+  });
+
+  it('recommends relaxed verification for refinement', () => {
     const ref = engine.classify('Make it shorter');
     assert.strictEqual(ref.verificationLevel, 'relaxed');
   });
