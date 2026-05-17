@@ -167,15 +167,31 @@ impl NSWindowSharingExt for ns::Window {
 /// This function is safe to call on any macOS version — on older systems
 /// only the sharingType approach is used.
 pub fn exclude_from_capture(window_number: u32) -> napi::Result<()> {
-    let mut window = find_window_or_err(window_number)?;
-
     // Layer 1: Set NSWindow.sharingType = .none
     // This tells the window server the window should not be shared/captured.
-    window.set_sharing_type(NS_WINDOW_SHARING_NONE);
+    // NOTE: NSPanel windows (type:'panel' in Electron) may not appear in
+    // [NSApp windows] enumeration. We attempt the lookup but do NOT bail
+    // if it fails — the CGS tag (Layer 2) is the critical path for SCK
+    // invisibility on macOS 15+ and operates on the window number directly
+    // without needing the NSWindow object.
+    let sharing_type_applied = match find_window(window_number) {
+        Some(mut window) => {
+            window.set_sharing_type(NS_WINDOW_SHARING_NONE);
+            true
+        }
+        None => {
+            // NSPanel / utility windows may not be in [NSApp windows].
+            // This is expected for overlay panels — proceed to CGS tag.
+            false
+        }
+    };
 
     // Layer 2: On macOS 15+, apply CGS window tag for SCK exclusion.
     // This ensures ScreenCaptureKit does not enumerate the window even
     // when apps use the modern SCShareableContent API.
+    // CRITICAL: This is the primary mechanism for hiding from screen-share
+    // apps (Zoom, Meet, Teams, OBS, browser getDisplayMedia). It operates
+    // directly on the CGS window ID and does NOT require the NSWindow object.
     if is_macos_15_or_later() {
         unsafe {
             let connection = CGSMainConnectionID();
@@ -193,6 +209,13 @@ pub fn exclude_from_capture(window_number: u32) -> napi::Result<()> {
                 )));
             }
         }
+    } else if !sharing_type_applied {
+        // On macOS < 15, sharingType is the ONLY mechanism. If we couldn't
+        // find the window to set it, that's a real failure.
+        return Err(napi::Error::from_reason(format!(
+            "macOS window not found for window number {} — cannot apply sharingType on pre-15 macOS",
+            window_number
+        )));
     }
 
     Ok(())

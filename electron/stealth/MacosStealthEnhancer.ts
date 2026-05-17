@@ -50,6 +50,12 @@ export class MacosStealthEnhancer extends EventEmitter {
       const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
       await this.applyWindowLevel(safeWindowNumber, MACOS_UTILITY_WINDOW_LEVEL);
       await this.disableWindowSharing(safeWindowNumber);
+      // NAT-SCK-PANEL: Also apply SCK exclusion tag directly via CGSSetWindowTags.
+      // On macOS 15+, disableWindowSharing (applyMacosWindowStealth) is a no-op,
+      // so the CGS exclusion tag is the only mechanism that hides from SCK-based
+      // screen-share apps. This call operates on the window number directly and
+      // works for both NSWindow and NSPanel windows.
+      this.applySckExclusionDirect(safeWindowNumber);
       this.enhancedWindows.add(safeWindowNumber);
       this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);
       this.emit('window-enhanced', safeWindowNumber);
@@ -57,6 +63,29 @@ export class MacosStealthEnhancer extends EventEmitter {
     } catch (error) {
       this.logger.warn('[MacosStealthEnhancer] Failed to enhance window protection:', error);
       return false;
+    }
+  }
+
+  /**
+   * Apply SCK exclusion tag directly using the native module.
+   * This is a belt-and-suspenders call that ensures the CGS tag is set
+   * even if the StealthManager's applySckExclusion had a timing issue.
+   */
+  private applySckExclusionDirect(windowNumber: number): void {
+    const nativeModule = this.getNativeModule();
+    const mod = nativeModule as Record<string, unknown> | null;
+    if (mod && typeof mod.applySckExclusion === 'function') {
+      try {
+        (mod.applySckExclusion as (wn: number) => void)(windowNumber);
+      } catch (error) {
+        this.logger.warn('[MacosStealthEnhancer] SCK exclusion direct apply failed:', error);
+      }
+    } else if (mod && typeof mod.excludeFromCapture === 'function') {
+      try {
+        (mod.excludeFromCapture as (wn: number) => void)(windowNumber);
+      } catch (error) {
+        this.logger.warn('[MacosStealthEnhancer] excludeFromCapture direct apply failed:', error);
+      }
     }
   }
 

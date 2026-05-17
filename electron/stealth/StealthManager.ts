@@ -916,14 +916,33 @@ export class StealthManager extends EventEmitter {
    * previously exposed but never called from TypeScript — that gap is what
    * caused windows to remain visible to Google Meet / Zoom / Teams screen
    * shares despite Electron reporting setContentProtection(true) success.
+   *
+   * For NSPanel windows (type:'panel'), getMediaSourceId() may not be
+   * immediately available after construction. If the window number cannot
+   * be resolved, we schedule a deferred retry to catch it once the window
+   * is fully registered with the window server.
    */
-  private applyNativeExcludeFromCapture(win: StealthCapableWindow): void {
+  private applyNativeExcludeFromCapture(win: StealthCapableWindow, retryCount: number = 0): void {
     const nativeModule = this.getNativeModule();
     if (!nativeModule?.excludeFromCapture) {
       return;
     }
     const windowNumber = this.getMacosWindowNumber(win);
     if (windowNumber === null) {
+      // NSPanel windows may not have a mediaSourceId immediately after creation.
+      // Retry up to 3 times with increasing delay to catch the window once
+      // it's fully registered with the window server.
+      if (retryCount < 3 && !isWindowDestroyed(win)) {
+        const delay = (retryCount + 1) * 50; // 50ms, 100ms, 150ms
+        this.timeoutScheduler(() => {
+          if (!isWindowDestroyed(win) && this.isEnabled()) {
+            this.applyNativeExcludeFromCapture(win, retryCount + 1);
+          }
+        }, delay);
+      } else {
+        this.logger.warn('[StealthManager] applyNativeExcludeFromCapture: unable to resolve window number after retries');
+        this.addWarning('native_exclude_from_capture_failed');
+      }
       return;
     }
     try {
@@ -1051,8 +1070,11 @@ export class StealthManager extends EventEmitter {
    *
    * Gracefully degrades: logs a warning on failure but does not throw.
    * No-op on macOS < 15 or non-darwin platforms.
+   *
+   * For NSPanel windows (type:'panel'), the window number may not be
+   * immediately available. Retries up to 3 times with backoff.
    */
-  private applySckExclusion(win: StealthCapableWindow): void {
+  private applySckExclusion(win: StealthCapableWindow, retryCount: number = 0): void {
     if (this.platform !== 'darwin' || !this.isMacOSVersionCompatible('15.0')) {
       return;
     }
@@ -1064,6 +1086,19 @@ export class StealthManager extends EventEmitter {
 
     const windowNumber = this.getMacosWindowNumber(win);
     if (windowNumber === null) {
+      // NSPanel windows may not have a mediaSourceId immediately after creation.
+      // Retry with backoff to catch the window once registered with the window server.
+      if (retryCount < 3 && !isWindowDestroyed(win)) {
+        const delay = (retryCount + 1) * 50; // 50ms, 100ms, 150ms
+        this.timeoutScheduler(() => {
+          if (!isWindowDestroyed(win) && this.isEnabled()) {
+            this.applySckExclusion(win, retryCount + 1);
+          }
+        }, delay);
+      } else {
+        this.logger.warn('[StealthManager] applySckExclusion: unable to resolve window number after retries');
+        this.addWarning('sck_exclusion_failed');
+      }
       return;
     }
 
