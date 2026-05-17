@@ -940,6 +940,21 @@ else
 fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
+# ── Reset Accessibility / Screen Recording TCC entries ──
+# macOS ties Accessibility permission to the code signature hash. Ad-hoc
+# signed dev builds get a new hash on every rebuild, which silently
+# revokes the permission. By resetting the TCC entry here, macOS will
+# re-prompt on first launch and the fresh binary gets authorized.
+# This only affects the Natively bundle ID — other apps are untouched.
+BUNDLE_ID="com.electron.meeting-notes"
+info "Resetting macOS TCC permissions for ${BUNDLE_ID} (ensures fresh binary is authorized)..."
+# tccutil reset requires the service name and bundle ID.
+# Accessibility = kTCCServiceAccessibility
+# ScreenCapture = kTCCServiceScreenCapture
+tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || true
+success "TCC permissions reset — macOS will re-prompt on first launch"
+
 # Verify installed app binary exists and matches expected architecture
 INSTALLED_BINARY="${INSTALL_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 require_file "$INSTALLED_BINARY" "Installed app binary"

@@ -463,6 +463,26 @@ keybindManager.onShortcutTriggered(async (actionId) => {
           if (mainWindow) {
             mainWindow.webContents.send('global-shortcut-action', actionId);
           }
+        } else if (actionId === 'general:toggle-cursor-hook') {
+          // NAT-CURSOR-SHORTCUT: Toggle the software cursor / cursor freeze
+          // hook via Cmd+Shift+\. Mirrors the Settings toggle behaviour:
+          // persists the choice, broadcasts status to all renderers.
+          const helper = this.getWindowHelper();
+          const newState = !helper.isCursorHookRequested();
+          const installed = helper.setCursorHookEnabled(newState);
+          try {
+            SettingsManager.getInstance().set('cursorHookEnabled', newState);
+          } catch (err) {
+            console.warn('[Main] Failed to persist cursorHookEnabled:', err);
+          }
+          // Broadcast to all renderers (overlay SyntheticCursor + Settings UI)
+          const status = { enabled: newState, installed };
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send('cursor-hook-status', status);
+            }
+          }
+          console.log(`[Main] Cursor hook toggled via shortcut: enabled=${newState}, installed=${installed}`);
         }
       } catch (e: any) {
         if (e.message !== "Selection cancelled") {
