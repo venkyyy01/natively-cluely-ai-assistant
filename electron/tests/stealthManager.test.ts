@@ -1447,7 +1447,7 @@ describe('StealthManager', () => {
   });
 
   // macOS 15+ dedicated tests
-  it('skips native stealth on macOS 15.4+ and relies on Layer 0', () => {
+  it('applies native stealth on macOS 15.4+ alongside Layer 0', () => {
     const nativeCalls: string[] = [];
     const nativeModule: NativeStealthBindings = {
       applyMacosWindowStealth() {
@@ -1462,12 +1462,13 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    // On macOS 15+, native CGS stealth is skipped (would cause black screen).
-    assert.deepStrictEqual(nativeCalls, []);
-    // Layer 0 (Electron setContentProtection) is still applied — it maps to
-    // NSWindowSharingNone, which hides from non-SCK capture without affecting
-    // user visibility. setExcludeFromCapture is not a real Electron API, so
-    // it is intentionally never called.
+    // RESTORED FROM `mac` BRANCH: native CGS stealth runs on every macOS
+    // version, including 15+. Earlier slopcode commits skipped this on 15+
+    // citing a black-screen bug; root cause was a renderer-side
+    // PrivacyShield ramp, not these calls.
+    assert.deepStrictEqual(nativeCalls, ['apply']);
+    // Layer 0 (Electron setContentProtection) still applies in tandem.
+    // setExcludeFromCapture is not a real Electron API, so it is never called.
     assert.deepStrictEqual(win.contentProtectionCalls, [true]);
     assert.deepStrictEqual(win.excludeFromCaptureCalls, []);
   });
@@ -1545,29 +1546,42 @@ describe('StealthManager', () => {
   it('keeps high-frequency reapplyProtectionLayers off the SCK native tag path', () => {
     const win = new FakeWindow();
     let sckApplyCalls = 0;
-    const manager = new StealthManager(
-      { enabled: true },
-      {
-        platform: 'darwin',
-        logger: silentLogger,
-        macosVersion: { major: 15, minor: 4 },
-        nativeModule: {
-          applySckExclusion() {
-            sckApplyCalls += 1;
+    const previousFlag = process.env.NATIVELY_TRY_SCK_TAG;
+    process.env.NATIVELY_TRY_SCK_TAG = '1';
+    try {
+      const manager = new StealthManager(
+        { enabled: true },
+        {
+          platform: 'darwin',
+          logger: silentLogger,
+          macosVersion: { major: 15, minor: 4 },
+          nativeModule: {
+            applySckExclusion() {
+              sckApplyCalls += 1;
+            },
+            verifySckExclusion() {
+              return true;
+            },
           },
-          verifySckExclusion() {
-            return true;
-          },
-        },
-      } as any
-    );
+        } as any
+      );
 
-    manager.applyToWindow(win as any, true, { role: 'primary' });
-    manager.reapplyProtectionLayers();
-    manager.reapplyProtectionLayers();
+      manager.applyToWindow(win as any, true, { role: 'primary' });
+      manager.reapplyProtectionLayers();
+      manager.reapplyProtectionLayers();
 
-    assert.strictEqual(sckApplyCalls, 1);
-    assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true]);
+      // Experimental SCK tag path is opt-in via NATIVELY_TRY_SCK_TAG=1.
+      // Even when opted in, the high-frequency reapply path should NOT
+      // re-invoke the native CGS write — only applyToWindow does.
+      assert.strictEqual(sckApplyCalls, 1);
+      assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true]);
+    } finally {
+      if (previousFlag === undefined) {
+        delete process.env.NATIVELY_TRY_SCK_TAG;
+      } else {
+        process.env.NATIVELY_TRY_SCK_TAG = previousFlag;
+      }
+    }
   });
 
   it('verifyStealth rejects Electron capture exclusion alone on macOS 15+', async () => {

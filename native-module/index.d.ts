@@ -55,19 +55,27 @@ export declare function setMacosWindowLevel(windowNumber: number, level: number)
 export declare function verifyMacosStealthState(windowNumber: number): number
 export declare function verifyMacosCaptureExclusion(windowNumber: number): boolean
 /**
- * Exclude a window from ScreenCaptureKit capture enumeration.
- * Combines NSWindow.sharingType = .none with CGSSetWindowTags on macOS 15+.
+ * EXPERIMENTAL — gated on the TypeScript side behind
+ * `NATIVELY_TRY_SCK_TAG=1`. Combines `[NSWindow setSharingType:.none]`
+ * (documented capture exclusion) with the reverse-engineered
+ * `CGSSetWindowTags` bit (undocumented). The first half is also what
+ * `setContentProtection(true)` already does, so default code paths
+ * don't call this.
  */
 export declare function excludeFromCapture(windowNumber: number): void
 /**
- * Apply ONLY the CGS window tag for ScreenCaptureKit exclusion (no sharingType change).
- * On macOS < 15, this is a graceful no-op.
+ * EXPERIMENTAL — gated on the TypeScript side behind
+ * `NATIVELY_TRY_SCK_TAG=1`. Writes ONLY the reverse-engineered
+ * `CGSSetWindowTags` bit (no `setSharingType:` change). Effect on
+ * ScreenCaptureKit cannot be verified externally.
  */
 export declare function applySckExclusion(windowNumber: number): void
 /**
- * Verify that the SCK exclusion tag is set on a window via CGSGetWindowTags.
- * Returns true if the window is properly excluded from SCK enumeration.
- * On non-macOS, always returns true (window is considered excluded).
+ * EXPERIMENTAL — gated on the TypeScript side behind
+ * `NATIVELY_TRY_SCK_TAG=1`. Read-back of the reverse-engineered CGS
+ * tag bit. Confirms only that our write reached the WindowServer; does
+ * NOT prove ScreenCaptureKit honours the bit. On non-macOS, always
+ * returns true.
  */
 export declare function verifySckExclusion(windowNumber: number): boolean
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
