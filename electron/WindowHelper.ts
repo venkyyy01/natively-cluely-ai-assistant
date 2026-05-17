@@ -1094,13 +1094,14 @@ this.launcherContentWindow = this.launcherWindow
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-      // NAT-SCK: Use 'screen-saver' level instead of 'floating'.
-      // On macOS 15+/26, 'screen-saver' is the highest non-system window level
-      // and ensures the overlay stays above full-screen apps. More importantly,
-      // windows at this level with sharingType=.none are properly excluded from
-      // ScreenCaptureKit capture by conformant apps (Meet, Teams, OBS, browser
-      // getDisplayMedia). The 'floating' level was insufficient.
-      this.overlayWindow.setAlwaysOnTop(true, "screen-saver", 1)
+      // NAT-SCK: Use 'pop-up-menu' level for SCK invisibility while keeping
+      // the window interactive. The level hierarchy on macOS:
+      //   floating (3) < modal-panel (8) < main-menu (24) < status < pop-up-menu < screen-saver
+      // 'pop-up-menu' is above the Dock and taskbar, high enough that SCK-conformant
+      // apps (Meet, Teams, OBS, browser getDisplayMedia) respect sharingType=.none,
+      // but still allows keyboard input and first-responder routing (unlike screen-saver
+      // which macOS treats as a non-interactive system overlay).
+      this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1)
     }
 
     // BLUR-PROOF (Windows): re-assert WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW on
@@ -1307,7 +1308,7 @@ this.launcherContentWindow = this.launcherWindow
         if (!this.overlayClickthroughEnabled && this.overlayInteractive) {
           this.overlayWindow.focus();
         }
-        this.overlayWindow.setAlwaysOnTop(true, "screen-saver", 1);
+        this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1);
         // Final re-assertion — Electron sometimes drops EX styles after
         // setOpacity transitions on Windows 11. Idempotent.
         if (!this.overlayInteractive) {
@@ -1347,7 +1348,7 @@ this.launcherContentWindow = this.launcherWindow
             this.overlayWindow.focus();
           }
         }
-        this.overlayWindow.setAlwaysOnTop(true, "screen-saver", 1);
+        this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1);
       }
       this.isWindowVisible = true;
     }
