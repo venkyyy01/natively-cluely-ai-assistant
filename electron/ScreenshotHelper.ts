@@ -8,6 +8,18 @@ import { exec as cpExec } from "node:child_process"
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
   private extraScreenshotQueue: string[] = []
+  /**
+   * NAT-SCREENSHOT-FRESHNESS: Per-path capture timestamps so the
+   * auto-trigger path can filter out stale screenshots before attaching
+   * them to a fresh interviewer turn. Without this, screenshots taken
+   * minutes earlier (problem A) get attached to a brand-new question
+   * (problem B / behavioral / off-topic) and confuse the LLM.
+   *
+   * Map keys are the same path strings stored in the queues. Entries are
+   * removed in lockstep with `trimQueue` and `clearQueues` so the map
+   * never outgrows the queues themselves.
+   */
+  private screenshotCapturedAt = new Map<string, number>()
   private readonly MAX_SCREENSHOTS = 5
   private readonly MAX_FILE_BYTES = 10 * 1024 * 1024
   private queueOp: Promise<void> = Promise.resolve()
@@ -79,6 +91,7 @@ export class ScreenshotHelper {
       while (queue.length > this.MAX_SCREENSHOTS) {
         const removedPath = queue.shift()
         if (!removedPath) continue
+        this.screenshotCapturedAt.delete(removedPath)
         try {
           await fs.promises.unlink(removedPath)
         } catch (error) {
@@ -150,11 +163,44 @@ export class ScreenshotHelper {
     const toUnlink = [...this.screenshotQueue, ...this.extraScreenshotQueue];
     this.screenshotQueue = [];
     this.extraScreenshotQueue = [];
+    this.screenshotCapturedAt.clear();
     for (const screenshotPath of toUnlink) {
       fs.unlink(screenshotPath, (_err) => {
         // best-effort; file may already be gone or held by reader
       });
     }
+  }
+
+  /**
+   * NAT-SCREENSHOT-FRESHNESS: Return only screenshots captured within
+   * the last `withinMs` milliseconds. Used by the auto-trigger path to
+   * avoid attaching stale screenshots to a freshly-arrived interviewer
+   * turn.
+   *
+   * Falls back to filesystem mtime when we don't have a recorded
+   * timestamp (defensive — captures are always recorded today, but a
+   * future restore-from-disk path could repopulate the queue without
+   * timestamps and we don't want to silently treat those as fresh).
+   */
+  public getRecentScreenshots(withinMs: number, now: number = Date.now()): string[] {
+    if (withinMs <= 0) return [];
+    const cutoff = now - withinMs;
+    const all = [...this.screenshotQueue, ...this.extraScreenshotQueue];
+    return all.filter((p) => {
+      const recorded = this.screenshotCapturedAt.get(p);
+      if (recorded != null) {
+        return recorded >= cutoff;
+      }
+      // No recorded timestamp — fall back to mtime, but treat fs errors
+      // as "stale" (conservative) so we never attach a screenshot we
+      // can't prove is fresh.
+      try {
+        const stat = fs.statSync(p);
+        return stat.mtimeMs >= cutoff;
+      } catch {
+        return false;
+      }
+    });
   }
 
   public async takeScreenshot(
@@ -186,6 +232,7 @@ export class ScreenshotHelper {
         await this.enforceFileSizeLimit(screenshotPath)
 
         this.screenshotQueue.push(screenshotPath)
+        this.screenshotCapturedAt.set(screenshotPath, Date.now())
         await this.trimQueue(this.screenshotQueue)
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
@@ -202,6 +249,7 @@ export class ScreenshotHelper {
         await this.enforceFileSizeLimit(screenshotPath)
 
         this.extraScreenshotQueue.push(screenshotPath)
+        this.screenshotCapturedAt.set(screenshotPath, Date.now())
         await this.trimQueue(this.extraScreenshotQueue)
       }
 
@@ -250,6 +298,7 @@ export class ScreenshotHelper {
       await this.enforceFileSizeLimit(screenshotPath)
 
       this.screenshotQueue.push(screenshotPath)
+      this.screenshotCapturedAt.set(screenshotPath, Date.now())
       await this.trimQueue(this.screenshotQueue)
 
       return screenshotPath

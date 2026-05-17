@@ -53,6 +53,7 @@ import { RAGManager } from "../rag/RAGManager"
 import { DatabaseManager } from "../db/DatabaseManager"
 import { warmupIntentClassifier } from "../llm"
 import { maybeHandleSuggestionTriggerFromTranscript } from "../ConsciousMode"
+import { DEFAULT_SCREENSHOT_FRESHNESS_MS } from "../coding/screenshotRelevance"
 import { MeetingCheckpointer } from "../MeetingCheckpointer"
 import { STTReconnector } from "../STTReconnector"
 import { CredentialsManager } from "../services/CredentialsManager"
@@ -1375,13 +1376,19 @@ try {
       // Originally wired in 0833816 ("screenshot wiring and llm cnceled
       // fix") and lost in a later refactor. Conscious-mode-only so the
       // fast standard path stays lean for plain interview turns.
-      const queuedScreenshots = this.consciousModeEnabled
-        ? [
-            ...this.screenshotHelper.getScreenshotQueue(),
-            ...this.screenshotHelper.getExtraScreenshotQueue(),
-          ]
+      //
+      // Two safety gates apply downstream:
+      //   1. Recency — only screenshots captured within
+      //      DEFAULT_SCREENSHOT_FRESHNESS_MS are surfaced here, so a
+      //      problem-A screenshot taken minutes ago doesn't bleed into a
+      //      problem-B / behavioral question.
+      //   2. Question shape — `ConsciousMode.triggerFromCandidate` drops
+      //      the imagePaths if the resolved question reads behavioral /
+      //      off-topic. Coding-shaped questions get the attach.
+      const recentScreenshots = this.consciousModeEnabled
+        ? this.screenshotHelper.getRecentScreenshots(DEFAULT_SCREENSHOT_FRESHNESS_MS)
         : [];
-      const autoTriggerImagePaths = queuedScreenshots.length > 0 ? queuedScreenshots : undefined;
+      const autoTriggerImagePaths = recentScreenshots.length > 0 ? recentScreenshots : undefined;
 
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
