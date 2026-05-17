@@ -1210,10 +1210,33 @@ export class StealthManager extends EventEmitter {
   }
 
   private ensureVirtualDisplayIsolation(record: ManagedWindowRecord): void {
+    // Virtual-display isolation is the strongest mac capture-exclusion
+    // layer (Layer 3 — moves the window content to an off-screen virtual
+    // display the user can still interact with but ScreenCaptureKit cannot
+    // enumerate). It pairs with Layers 0–2 (`setContentProtection`,
+    // `applyMacosWindowStealth`, `applyMacosPrivateWindowStealth`) and
+    // closes the gap on macOS 15+ where SCK-based capture can otherwise
+    // bypass `setSharingType:.none` for some privileged callers.
+    //
+    // Gate ONLY on:
+    //   • platform = darwin
+    //   • feature flag `enableVirtualDisplayIsolation` (defaults true on
+    //     non-MAS darwin in AppState)
+    //   • a coordinator instance (wired automatically when the flag is on)
+    //   • the per-window opt-in `allowVirtualDisplayIsolation` (every
+    //     window-creation site sets this to true today)
+    //   • not already started for this record
+    //
+    // Decoupled from `isEnhancedStealthEnabled()` (the master Acceleration
+    // Mode toggle) so Layer 3 runs proactively for every user with stealth
+    // enabled, not just users who flip Acceleration Mode on. Other enhanced
+    // monitors (watchdog, SCStream / CGWindow / Chromium detection,
+    // opacity flicker) intentionally stay gated by Acceleration Mode —
+    // they are optimization-mode features. Virtual display is invisibility,
+    // not optimization.
     if (
       this.platform !== 'darwin' ||
       !this.featureFlags.enableVirtualDisplayIsolation ||
-      !this.isEnhancedStealthEnabled() ||
       !this.virtualDisplayCoordinator ||
       !record.allowVirtualDisplayIsolation ||
       record.virtualDisplayIsolationStarted
