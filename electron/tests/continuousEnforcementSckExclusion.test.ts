@@ -4,11 +4,20 @@
 // Validates that the enforcement loop correctly polls SCK exclusion state,
 // re-applies exclusion on failure, and triggers emergency protection after
 // consecutive failures.
+//
+// SCK exclusion is an experimental code path gated behind
+// `NATIVELY_TRY_SCK_TAG=1`. We opt in for the entire suite so the loop
+// actually runs the verification and re-apply logic the tests exercise.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ContinuousEnforcementLoop } from '../stealth/ContinuousEnforcementLoop';
+
+// Opt into the experimental SCK CGS tag path for the lifetime of this
+// test module. Any test importing this file is intentionally exercising
+// behaviour that is OFF by default in production.
+process.env.NATIVELY_TRY_SCK_TAG = '1';
 
 const silentLogger = {
   log() {},

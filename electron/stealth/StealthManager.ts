@@ -2206,16 +2206,26 @@ for window in windows:
       // Electron / Apple's own AppKit use. It is NOT an absolute
       // guarantee on macOS 15+: privileged callers (QuickTime, some
       // conferencing apps with private entitlements) can still capture
-      // regardless. We accept any of three signals as proof of capture
+      // regardless. We accept any of these signals as proof of capture
       // exclusion against the public capture path:
-      //   1. EXPERIMENTAL: the reverse-engineered CGS tag bit is set
+      //   1. The private CGS SPI path (`CGSSetWindowSharingState` via
+      //      `applyMacosPrivateWindowStealth`) was applied successfully.
+      //      This is the documented internal call AppKit uses for
+      //      `setSharingType:` and works on the window number directly,
+      //      so it covers NSPanel / utility windows that aren't in
+      //      `[NSApp windows]`. This is the mac-branch parity path.
+      //   2. EXPERIMENTAL: the reverse-engineered CGS tag bit is set
       //      (via `verifySckExclusion`). Only meaningful when
       //      NATIVELY_TRY_SCK_TAG=1 is active. The read-back only
       //      confirms our own write, not SCK behaviour.
-      //   2. Layer 3 virtual-display isolation is ready.
-      //   3. EXPERIMENTAL: the native `excludeFromCapture` call succeeded
+      //   3. Layer 3 virtual-display isolation is ready.
+      //   4. EXPERIMENTAL: the native `excludeFromCapture` call succeeded
       //      (combines `setSharingType:` with the CGS tag bit). Same
-      //      caveats as #1.
+      //      caveats as #2.
+      const privateMacosVerified = Boolean(
+        this.featureFlags.enablePrivateMacosStealthApi &&
+        record.privateMacosStealthApplied
+      );
       const virtualDisplayVerified = Boolean(
         this.featureFlags.enableVirtualDisplayIsolation &&
         record.allowVirtualDisplayIsolation &&
@@ -2228,7 +2238,10 @@ for window in windows:
         && record.excludeFromCaptureApplied
         && !this.stealthDegradationWarnings.has('native_exclude_from_capture_failed');
       const macos15ProtectionVerified =
-        sckExclusionVerified || virtualDisplayVerified || nativeExcludeAppliedSuccessfully;
+        privateMacosVerified
+        || sckExclusionVerified
+        || virtualDisplayVerified
+        || nativeExcludeAppliedSuccessfully;
       if (!macos15ProtectionVerified) {
         if (this.isEnabled()) {
           const addedVirtualDisplayWarning = this.addWarning('virtual_display_required');

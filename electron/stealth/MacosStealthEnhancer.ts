@@ -50,11 +50,11 @@ export class MacosStealthEnhancer extends EventEmitter {
       const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
       await this.applyWindowLevel(safeWindowNumber, MACOS_UTILITY_WINDOW_LEVEL);
       await this.disableWindowSharing(safeWindowNumber);
-      // NAT-SCK-PANEL: Also apply SCK exclusion tag directly via CGSSetWindowTags.
-      // On macOS 15+, disableWindowSharing (applyMacosWindowStealth) is a no-op,
-      // so the CGS exclusion tag is the only mechanism that hides from SCK-based
-      // screen-share apps. This call operates on the window number directly and
-      // works for both NSWindow and NSPanel windows.
+      // EXPERIMENTAL (NATIVELY_TRY_SCK_TAG=1): also write the
+      // reverse-engineered CGS tag bit. No-op by default.
+      // disableWindowSharing already calls
+      // `[NSWindow setSharingType:.none]` (the documented capture
+      // exclusion API), so this is opt-in extra.
       this.applySckExclusionDirect(safeWindowNumber);
       this.enhancedWindows.add(safeWindowNumber);
       this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);
@@ -67,11 +67,19 @@ export class MacosStealthEnhancer extends EventEmitter {
   }
 
   /**
-   * Apply SCK exclusion tag directly using the native module.
-   * This is a belt-and-suspenders call that ensures the CGS tag is set
-   * even if the StealthManager's applySckExclusion had a timing issue.
+   * EXPERIMENTAL: Apply the reverse-engineered CGS tag bit directly via
+   * the native module. Gated behind `NATIVELY_TRY_SCK_TAG=1` — default
+   * behaviour is a no-op. The same bit is exposed by
+   * `StealthManager.applySckExclusion`; this direct path exists for
+   * Chromium-capture countermeasures where we want to write the bit
+   * without going through the manager's record bookkeeping. Both layers
+   * respect the same env-var gate so the experiment is uniformly off by
+   * default.
    */
   private applySckExclusionDirect(windowNumber: number): void {
+    if (process.env.NATIVELY_TRY_SCK_TAG !== '1') {
+      return;
+    }
     const nativeModule = this.getNativeModule();
     const mod = nativeModule as Record<string, unknown> | null;
     if (mod && typeof mod.applySckExclusion === 'function') {
@@ -187,16 +195,15 @@ for window in windows:
 
   private async disableWindowSharing(windowNumber: number): Promise<void> {
     const nativeModule = this.getNativeModule();
-    // Always use the native module — it handles macOS version branching internally:
-    //   macOS < 15: NSWindow.setSharingType:0 + CGS SPI reinforcement
-    //   macOS 15+:  CGS SPI only (setSharingType crashes on 15+)
+    // The native module sets `NSWindow.sharingType = .none` (the documented
+    // capture-exclusion API) and reinforces it via the private CGS SPI
+    // `CGSSetWindowSharingState`. Both calls run on every macOS version
+    // (mac branch parity, restored after the slopcode 15+ skip).
     if (nativeModule?.applyMacosWindowStealth) {
       nativeModule.applyMacosWindowStealth(windowNumber);
       return;
     }
 
-    // Only fall back to Python on macOS < 15. On macOS 15+ the Python fallback
-    // would use setSharingType_ which crashes the process.
     this.logger.warn('[MacosStealthEnhancer] Native module unavailable, skipping window sharing disable');
   }
 
