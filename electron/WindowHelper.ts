@@ -1024,10 +1024,8 @@ this.launcherContentWindow = this.launcherWindow
     skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     // macOS only: tag the overlay as a panel so AppKit instantiates it as
-    // NSPanel with NSWindowStyleMaskNonactivatingPanel. This provides
-    // non-activating behavior (no blur events in underlying browser).
-    // NOTE: type:'panel' does NOT interfere with setContentProtection/sharingType
-    // on macOS 26 — confirmed by Ezzi (open-source) which uses the same approach.
+    // NSPanel with NSWindowStyleMaskNonactivatingPanel. No effect on other
+    // platforms (Electron ignores the field there).
     ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
   }
 
@@ -1094,14 +1092,7 @@ this.launcherContentWindow = this.launcherWindow
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-      // NAT-SCK: Use 'pop-up-menu' level for SCK invisibility while keeping
-      // the window interactive. The level hierarchy on macOS:
-      //   floating (3) < modal-panel (8) < main-menu (24) < status < pop-up-menu < screen-saver
-      // 'pop-up-menu' is above the Dock and taskbar, high enough that SCK-conformant
-      // apps (Meet, Teams, OBS, browser getDisplayMedia) respect sharingType=.none,
-      // but still allows keyboard input and first-responder routing (unlike screen-saver
-      // which macOS treats as a non-interactive system overlay).
-      this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1)
+      this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
 
     // BLUR-PROOF (Windows): re-assert WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW on
@@ -1308,7 +1299,7 @@ this.launcherContentWindow = this.launcherWindow
         if (!this.overlayClickthroughEnabled && this.overlayInteractive) {
           this.overlayWindow.focus();
         }
-        this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1);
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
         // Final re-assertion — Electron sometimes drops EX styles after
         // setOpacity transitions on Windows 11. Idempotent.
         if (!this.overlayInteractive) {
@@ -1348,7 +1339,7 @@ this.launcherContentWindow = this.launcherWindow
             this.overlayWindow.focus();
           }
         }
-        this.overlayWindow.setAlwaysOnTop(true, "pop-up-menu", 1);
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
       }
       this.isWindowVisible = true;
     }
