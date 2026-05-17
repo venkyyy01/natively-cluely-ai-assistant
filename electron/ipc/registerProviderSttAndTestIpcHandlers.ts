@@ -401,7 +401,7 @@ export function registerProviderSttAndTestIpcHandlers(deps: ProviderSttTestIpcDe
         let response;
   
         if (provider === 'gemini') {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent`;
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent`;
           response = await axios.post(url, {
             contents: [{ parts: [{ text: "Hello" }] }]
           }, {
