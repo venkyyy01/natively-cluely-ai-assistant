@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { EventEmitter } from 'events';
 import { decideStealthFallback } from './StealthFallbackPolicy';
 import { loadNativeStealthModule } from './nativeStealthModule';
+import { isOptimizationActive } from '../config/optimizations';
 
 interface StealthEnhancerOptions {
   platform?: string;
@@ -68,16 +69,18 @@ export class MacosStealthEnhancer extends EventEmitter {
 
   /**
    * EXPERIMENTAL: Apply the reverse-engineered CGS tag bit directly via
-   * the native module. Gated behind `NATIVELY_TRY_SCK_TAG=1` — default
-   * behaviour is a no-op. The same bit is exposed by
+   * the native module. The same bit is exposed by
    * `StealthManager.applySckExclusion`; this direct path exists for
    * Chromium-capture countermeasures where we want to write the bit
-   * without going through the manager's record bookkeeping. Both layers
-   * respect the same env-var gate so the experiment is uniformly off by
-   * default.
+   * without going through the manager's record bookkeeping.
+   *
+   * Two ways to opt in (matched to the manager-side gate so the
+   * experiment is uniformly on/off across both layers):
+   *   • Acceleration Mode is active (`useStealthMode` flag)
+   *   • `NATIVELY_TRY_SCK_TAG=1` env var
    */
   private applySckExclusionDirect(windowNumber: number): void {
-    if (process.env.NATIVELY_TRY_SCK_TAG !== '1') {
+    if (process.env.NATIVELY_TRY_SCK_TAG !== '1' && !isOptimizationActive('useStealthMode')) {
       return;
     }
     const nativeModule = this.getNativeModule();

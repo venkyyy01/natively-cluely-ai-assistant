@@ -4,6 +4,7 @@ import type { SupervisorBus } from '../runtime/SupervisorBus';
 import type { StealthTickCoordinator } from './StealthTickCoordinator';
 import { gracefulShutdown } from '../GracefulShutdownManager';
 import { loadNativeStealthModule } from './nativeStealthModule';
+import { isOptimizationActive } from '../config/optimizations';
 
 export interface EnforcementLoopIntervals {
   windowProtectionMs: number; // 250ms
@@ -171,9 +172,10 @@ export class ContinuousEnforcementLoop {
       });
 
       // SCK exclusion: 2000ms / 250ms base = cadence 8 (macOS 15+ only).
-      // Gated behind NATIVELY_TRY_SCK_TAG=1 — the loop verifies and rewrites
-      // the experimental CGS tag bit, so it must not run when the experiment
-      // is opted out.
+      // Gated behind isSckTagExperimentEnabled() — Acceleration Mode (the
+      // master `useStealthMode` flag) OR `NATIVELY_TRY_SCK_TAG=1`. The
+      // loop verifies and rewrites the experimental CGS tag bit, so it
+      // must not run when the experiment is opted out.
       if (this.isSckTagExperimentEnabled() && this.stealthManager.isMacOS15PlusCapable()) {
         this.tickCoordinator.register({
           id: 'enforcement-sck-exclusion',
@@ -206,7 +208,8 @@ export class ContinuousEnforcementLoop {
       this.disguiseValidationTimer.unref?.();
 
       // SCK exclusion verification loop (2s default, macOS 15+ only).
-      // Gated behind NATIVELY_TRY_SCK_TAG=1 — see tick-coordinator branch.
+      // Gated behind isSckTagExperimentEnabled() — Acceleration Mode OR
+      // NATIVELY_TRY_SCK_TAG=1. See the tick-coordinator branch.
       if (this.isSckTagExperimentEnabled() && this.stealthManager.isMacOS15PlusCapable()) {
         const sckInterval = this.intervals.sckExclusionMs ?? DEFAULT_SCK_EXCLUSION_INTERVAL_MS;
         this.sckExclusionTimer = setInterval(() => {
@@ -309,10 +312,13 @@ export class ContinuousEnforcementLoop {
   /**
    * Whether the experimental SCK CGS tag path is enabled.
    * See `StealthManager.isSckTagExperimentEnabled` for full rationale.
-   * Default OFF; set NATIVELY_TRY_SCK_TAG=1 to opt in.
+   *
+   * Two ways to opt in:
+   *   • Acceleration Mode is active (`useStealthMode` optimization flag)
+   *   • `NATIVELY_TRY_SCK_TAG=1` env var
    */
   private isSckTagExperimentEnabled(): boolean {
-    return process.env.NATIVELY_TRY_SCK_TAG === '1';
+    return process.env.NATIVELY_TRY_SCK_TAG === '1' || isOptimizationActive('useStealthMode');
   }
 
   /**
@@ -322,7 +328,8 @@ export class ContinuousEnforcementLoop {
    * After SCK_MAX_CONSECUTIVE_FAILURES consecutive failures for a window,
    * triggers emergency protection (hides the window).
    *
-   * EXPERIMENTAL — gated behind NATIVELY_TRY_SCK_TAG=1. The CGS tag bit
+   * EXPERIMENTAL — gated behind Acceleration Mode (`useStealthMode`
+   * optimization flag) OR `NATIVELY_TRY_SCK_TAG=1`. The CGS tag bit
    * (1 << 3) the loop reads and writes is reverse-engineered and
    * undocumented. Default flow opts out so we never spin on a bit whose
    * semantics we can't trust.

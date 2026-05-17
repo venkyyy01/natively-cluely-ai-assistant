@@ -861,7 +861,16 @@ export class StealthManager extends EventEmitter {
   /**
    * Whether the experimental SCK CGS tag path is enabled.
    *
-   * Default is OFF. Set NATIVELY_TRY_SCK_TAG=1 to opt in.
+   * Two ways to opt in:
+   *   1. Acceleration Mode is active (Settings → Acceleration). The
+   *      master `accelerationEnabled` optimization flag flips
+   *      `useStealthMode`, which we treat as the user opting into the
+   *      enhanced experimental stealth surface alongside other
+   *      acceleration-mode features (capture watchdog, SCStream /
+   *      CGWindow / Chromium detection, opacity flicker).
+   *   2. `NATIVELY_TRY_SCK_TAG=1` env var. For power users / CI / smoke
+   *      tests that want to force the path on without flipping
+   *      Acceleration Mode.
    *
    * The bit (1 << 3 in `CGSSetWindowTags`) is reverse-engineered from
    * the WindowServer's internal handling of `setSharingType:.none` on
@@ -875,7 +884,7 @@ export class StealthManager extends EventEmitter {
    * That's the same primitive Apple, Tauri, and Electron use.
    */
   private isSckTagExperimentEnabled(): boolean {
-    return process.env.NATIVELY_TRY_SCK_TAG === '1';
+    return process.env.NATIVELY_TRY_SCK_TAG === '1' || this.isEnhancedStealthEnabled();
   }
 
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {
