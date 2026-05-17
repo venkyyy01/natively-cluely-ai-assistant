@@ -1315,21 +1315,21 @@ this.launcherContentWindow = this.launcherWindow
           this.applyWindowsOverlayNoActivate();
         }
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-        // STEALTH: Use showInactive() on macOS to prevent stealing focus from the
-        // browser. The overlay appears on screen but Chrome keeps key-window status,
-        // so proctoring scripts never see a blur event. The user can click the overlay
-        // input field when they need to type — NSPanel focus doesn't activate the app.
+        // Show the overlay and make it key (interactive).
+        // On macOS with type:'panel', focus() calls makeKeyAndOrderFront: which
+        // makes the NSPanel "key" (receives keyboard input) WITHOUT activating
+        // the app — NSWindowStyleMaskNonactivatingPanel prevents [NSApp activate].
+        // This matches the working mac branch behavior.
         if (process.platform === 'darwin') {
           this.overlayWindow!.showInactive();
+          if (!this.overlayClickthroughEnabled) {
+            this.overlayWindow!.focus();
+          }
         } else {
           this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay')
         }
         this.stealthManager.reapplyAfterShow(this.overlayWindow);
-        // Only call focus() when:
-        //   - Linux/other (no blur-proof primitive available), OR
-        //   - Windows AND the user has opted into interactive mode for typing
-        // Never on macOS (NSPanel handles activation; calling focus() would
-        // promote the app and trigger blur on the browser).
+        // Focus on non-macOS platforms
         if (!this.overlayClickthroughEnabled && process.platform !== 'darwin') {
           if (process.platform === 'win32') {
             if (this.overlayInteractive) {
