@@ -357,6 +357,47 @@ require_asar_entry() {
     fi
 }
 
+# Verify the packaged native-module exports the OCR symbols by spawning a
+# Node process that loads the .node binary directly. Catches the
+# regression where we ship a stale binary without recognizeTextMacos /
+# recognizeTextWindows after a build glitch.
+require_packaged_native_ocr_exports() {
+    local unpacked_dir="$1"
+    local bin_basename="$2"
+    local platform_label="$3"
+    local node_bin="${unpacked_dir}/node_modules/natively-audio/${bin_basename}"
+
+    if [[ ! -f "$node_bin" ]]; then
+        fail "Packaged native binary missing for OCR symbol probe: $node_bin"
+    fi
+
+    local probe_script
+    probe_script='
+        const path = require("path");
+        const bin = path.resolve(process.argv[1]);
+        const native = require(bin);
+        const want = ["recognizeTextMacos", "recognizeTextWindows"];
+        for (const name of want) {
+          if (typeof native[name] !== "function") {
+            console.error("MISSING:" + name);
+            process.exit(2);
+          }
+        }
+        console.log("OCR_EXPORTS_OK");
+    '
+
+    local probe_output
+    if probe_output=$(node -e "$probe_script" "$node_bin" 2>&1); then
+        if [[ "$probe_output" == *"OCR_EXPORTS_OK"* ]]; then
+            success "Packaged native module exports OCR symbols (${platform_label})"
+        else
+            warn "Native OCR probe returned unexpected output (${platform_label}): $probe_output"
+        fi
+    else
+        fail "Packaged native module is missing OCR exports (${platform_label}): $probe_output"
+    fi
+}
+
 is_truthy_flag() {
     local value="${1:-}"
     case "$value" in
@@ -827,11 +868,31 @@ if [[ "$BUILD_ARCH" == "arm64" ]]; then
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
+    require_packaged_native_ocr_exports "$APP_ASAR_UNPACKED_DIR" "index.darwin-arm64.node" "darwin-arm64"
 else
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-x64.node" "Unpacked x64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
+    require_packaged_native_ocr_exports "$APP_ASAR_UNPACKED_DIR" "index.darwin-x64.node" "darwin-x64"
 fi
+
+# OCR cascade ships three providers: Apple Vision (native), Windows OCR
+# (native, no-op on darwin), and Tesseract.js (universal fallback). The
+# fallback provider lives in tesseract.js inside the packaged asar; if
+# it's missing the cascade still runs but degrades to native-only. Warn
+# rather than fail because Tesseract is optional on platforms where the
+# native provider works.
+if npx asar list "$APP_ASAR_PATH" 2>/dev/null | grep -Fxq "/node_modules/tesseract.js/package.json"; then
+    success "Packaged Tesseract.js fallback present"
+else
+    warn "Packaged Tesseract.js fallback missing — OCR cascade will rely on Apple Vision only"
+fi
+
+# Ensure the OcrService cascade modules made it into the asar.
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/ocr/OcrService.js" "Packaged OcrService"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/ocr/providers/AppleVisionOcrProvider.js" "Packaged Apple Vision OCR provider"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/ocr/providers/WindowsOcrProvider.js" "Packaged Windows OCR provider"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/ocr/providers/TesseractOcrProvider.js" "Packaged Tesseract OCR provider"
 
 success "Permission manifest verified"
 
@@ -878,6 +939,21 @@ else
     sudo xattr -d com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
 fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
+
+# ── Reset Accessibility / Screen Recording TCC entries ──
+# macOS ties Accessibility permission to the code signature hash. Ad-hoc
+# signed dev builds get a new hash on every rebuild, which silently
+# revokes the permission. By resetting the TCC entry here, macOS will
+# re-prompt on first launch and the fresh binary gets authorized.
+# This only affects the Natively bundle ID — other apps are untouched.
+BUNDLE_ID="com.electron.meeting-notes"
+info "Resetting macOS TCC permissions for ${BUNDLE_ID} (ensures fresh binary is authorized)..."
+# tccutil reset requires the service name and bundle ID.
+# Accessibility = kTCCServiceAccessibility
+# ScreenCapture = kTCCServiceScreenCapture
+tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || true
+success "TCC permissions reset — macOS will re-prompt on first launch"
 
 # Verify installed app binary exists and matches expected architecture
 INSTALLED_BINARY="${INSTALL_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"

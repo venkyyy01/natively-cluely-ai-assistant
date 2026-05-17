@@ -631,7 +631,7 @@ export class IntelligenceEngine extends EventEmitter {
         });
     }
 
-    private buildCooldownKey(question: string | undefined): string {
+    private buildCooldownKey(question: string | undefined, imagePaths?: string[]): string {
         const normalizedQuestion = (question || 'inferred')
             .trim()
             .toLowerCase()
@@ -641,7 +641,18 @@ export class IntelligenceEngine extends EventEmitter {
             ? `${activeThread.rootQuestion.trim().toLowerCase()}::${activeThread.followUpCount}`
             : 'no-thread';
 
-        return `${threadKey}:${normalizedQuestion}`;
+        // NAT-SCREENSHOT-COOLDOWN: When the trigger is screenshot-driven,
+        // include the image path set in the cooldown key. Two consecutive
+        // screenshots in independent / live-coding mode use the same
+        // synthetic question string, which would otherwise collide and
+        // suppress the second response under the trigger cooldown.
+        // Hashing the file paths gives each screenshot a distinct key
+        // while still deduping a real double-trigger on the same image.
+        const imageKey = imagePaths && imagePaths.length > 0
+            ? `::img:${imagePaths.slice().sort().join('|')}`
+            : '';
+
+        return `${threadKey}:${normalizedQuestion}${imageKey}`;
     }
 
     private pruneCooldownKeys(now: number): void {
@@ -846,7 +857,14 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
-        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
+        await this.runWhatShouldISay(
+            trigger.lastQuestion,
+            trigger.confidence,
+            trigger.imagePaths,
+            0,
+            undefined,
+            trigger.sourceUtteranceId,
+        );
     }
 
     // ============================================
@@ -924,7 +942,35 @@ export class IntelligenceEngine extends EventEmitter {
         priorCooldownReason?: CooldownSuppressionReason,
         sourceUtteranceId?: string,
     ): Promise<string | null> {
-        const initialResolvedQuestion = this.resolveWhatToSayQuestion(question);
+        let initialResolvedQuestion = this.resolveWhatToSayQuestion(question);
+
+        // NAT-SCREENSHOT-INDEPENDENT: When screenshots are present but no
+        // interviewer question is available, inject a screenshot-driven
+        // synthetic question so the pipeline runs end-to-end instead of
+        // suppressing. Two scenarios produce this state:
+        //
+        //   1. Conscious mode OFF, no meeting — user wants generic /
+        //      coding screenshot help with no audio context.
+        //   2. Meeting active but transcripts are still warming up
+        //      (Deepgram took 8-10 s to emit its first turn in today's
+        //      logs) — the user pressed the shortcut before a question
+        //      landed.
+        //
+        // The synthetic string deliberately contains "this screenshot"
+        // so `isScreenshotBackedLiveCodingTurn` matches and the conscious
+        // / coding answer route fires when conscious mode is enabled.
+        // For live interviews where transcripts ARE flowing, the regular
+        // resolution path takes precedence and the synthetic fallback
+        // never fires.
+        if (!initialResolvedQuestion && imagePaths?.length) {
+            const syntheticQuestion = 'Analyze this screenshot and help me with what is shown — if it is code, an editor, a coding problem, or a coderpad / OA, treat it as a coding task and produce a working solution; otherwise summarise what is shown and answer any visible question.';
+            console.log('[INTELLIGENCE] No resolved question but screenshots present — using synthetic question for independent screenshot processing.', {
+                imagePaths: imagePaths.length,
+                consciousModeEnabled: this.session.isConsciousModeEnabled(),
+            });
+            initialResolvedQuestion = syntheticQuestion;
+        }
+
         if (!initialResolvedQuestion) {
             console.warn('[INTELLIGENCE] Suppressing what-to-say: no resolved interviewer question available.', {
                 explicitQuestion: question,
@@ -957,7 +1003,7 @@ export class IntelligenceEngine extends EventEmitter {
         while (true) {
             const now = Date.now();
             this.pruneCooldownKeys(now);
-            const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+            const cooldownKey = this.buildCooldownKey(cooldownQuestion, imagePaths);
             const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
             const effectiveTriggerCooldown = sourceUtteranceId ? 0 : this.triggerCooldown;
             const cooldownRemaining = Math.max(0, effectiveTriggerCooldown - (now - lastTriggerForKey));
@@ -1007,7 +1053,7 @@ export class IntelligenceEngine extends EventEmitter {
         }
 
         const now = Date.now();
-        const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+        const cooldownKey = this.buildCooldownKey(cooldownQuestion, imagePaths);
         const metadataCooldownSuppressedMs = totalCooldownSuppressedMs > 0
             ? totalCooldownSuppressedMs
             : undefined;
@@ -1742,6 +1788,7 @@ export class IntelligenceEngine extends EventEmitter {
                     answerLLM: this.answerLLM,
                     codingProblem: this.session.getCodingProblem(),
                     turnPlan: consciousTurnPlan,
+                    abortSignal: whatToSayAbortController.signal,
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);

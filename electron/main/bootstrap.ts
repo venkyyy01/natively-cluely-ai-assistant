@@ -16,7 +16,6 @@ import {
 } from '../startup/StartupHealer'
 import { validateIntegrity } from '../integrity/IntegrityValidator'
 import { applyAdaptiveAcceleration } from '../config/optimizations'
-import { createPermissionWizard } from '../permissions/PermissionWizard'
 
 // Application initialization
 
@@ -128,13 +127,18 @@ export async function initializeApp() {
 
     // NAT-PERMISSIONS: Use PermissionWizard for first-launch flow and revocation detection.
     // Replaces the standalone microphone check with a comprehensive sequential wizard.
+    // The wizard instance lives on AppState so the IPC handlers and the
+    // browser-window-focus re-check below share its state file and cache.
     if (process.platform === 'darwin') {
-      const wizard = createPermissionWizard();
+      const wizard = appState.getPermissionWizard();
       if (wizard.shouldRunWizard()) {
         await wizard.runWizard();
       } else {
         await wizard.checkRevocations();
       }
+      // Re-check on every focus so a permission granted in System Settings
+      // mid-session lights up the dependent feature without an app restart.
+      appState.installPermissionFocusListener();
     }
     
     // Start the Ollama lifecycle manager
@@ -183,7 +187,18 @@ export async function initializeApp() {
     const cursorEnabledFromSettings =
       SettingsManager.getInstance().get('cursorHookEnabled') ?? false;
     if (cursorEnabledFromSettings) {
-      appState.getWindowHelper().setCursorHookEnabled(true);
+      // setCursorHookEnabled(true) returns false if the OS permission was
+      // revoked between sessions or the native binding is missing. We log
+      // the silent-degraded outcome so diagnostics show why the cursor
+      // freeze isn't active even though Settings shows it as enabled.
+      // The Settings UI separately polls getCursorHookStatus on mount and
+      // surfaces a "permission needed" hint to the user.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(true);
+      if (!installed) {
+        console.warn(
+          '[bootstrap] Cursor stealth was enabled in settings but native hook did not install (likely Accessibility permission denied or native module missing). User-facing toggle will display "permission needed" until the user re-enables.',
+        );
+      }
     }
   } catch (err) {
     console.warn('[bootstrap] Failed to restore cursor hook setting:', err);

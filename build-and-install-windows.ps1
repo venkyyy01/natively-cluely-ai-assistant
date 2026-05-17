@@ -563,6 +563,106 @@ if ($portable) {
 
 Success "Artifact verification passed"
 
+# ── OCR cascade verification ──────────────────────────────────────────────
+# The packaged native binary must export recognizeTextMacos and
+# recognizeTextWindows so the OCR cascade can fall through to Tesseract
+# without throwing on missing symbols. Probe by loading the .node binary
+# in a Node child process and checking the exports.
+function Test-PackagedNativeOcrExports {
+    param(
+        [string]$BinaryPath,
+        [string]$Label
+    )
+    if (-not (Test-Path $BinaryPath)) {
+        Warn "Native binary missing for OCR symbol probe: $BinaryPath"
+        return $false
+    }
+    $probeScript = @'
+        const path = require("path");
+        const bin = path.resolve(process.argv[2]);
+        const native = require(bin);
+        const want = ["recognizeTextMacos", "recognizeTextWindows"];
+        for (const name of want) {
+          if (typeof native[name] !== "function") {
+            console.error("MISSING:" + name);
+            process.exit(2);
+          }
+        }
+        console.log("OCR_EXPORTS_OK");
+'@
+    try {
+        $output = & node -e $probeScript $BinaryPath 2>&1
+        if ($LASTEXITCODE -eq 0 -and $output -match 'OCR_EXPORTS_OK') {
+            Success "Packaged native module exports OCR symbols ($Label)"
+            return $true
+        }
+        Warn "Native OCR probe failed ($Label): $output"
+        return $false
+    } catch {
+        Warn "Native OCR probe exception ($Label): $_"
+        return $false
+    }
+}
+
+# Search for the packaged native module inside the win-unpacked tree.
+$winUnpackedRoots = @(
+    (Join-Path $ReleaseDir "win-unpacked"),
+    (Join-Path $ReleaseDir "win-x64-unpacked"),
+    $ReleaseDir
+)
+$packagedNativeDir = $null
+foreach ($candidateRoot in $winUnpackedRoots) {
+    if (-not (Test-Path $candidateRoot)) { continue }
+    $found = Get-ChildItem -Path $candidateRoot -Recurse -File `
+        -Filter "index.win32-x64-msvc.node" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($found) {
+        $packagedNativeDir = $found.DirectoryName
+        Test-PackagedNativeOcrExports -BinaryPath $found.FullName -Label "win32-x64-msvc" | Out-Null
+        break
+    }
+}
+if (-not $packagedNativeDir) {
+    Warn "Could not locate packaged native module (index.win32-x64-msvc.node) — skipping OCR symbol verification"
+}
+
+# Tesseract.js is the universal fallback. If it's missing, the cascade
+# still runs Windows.Media.Ocr but degrades on machines without the
+# Windows OCR language pack — warn rather than fail.
+$asarRoots = @(
+    (Join-Path $ReleaseDir "win-unpacked\resources\app.asar"),
+    (Join-Path $ReleaseDir "win-x64-unpacked\resources\app.asar")
+)
+foreach ($asarPath in $asarRoots) {
+    if (Test-Path $asarPath) {
+        Info "Verifying OCR cascade modules in $asarPath"
+        try {
+            $asarOutput = & npx asar list $asarPath 2>&1
+            $expected = @(
+                '/dist-electron/electron/ocr/OcrService.js',
+                '/dist-electron/electron/ocr/providers/AppleVisionOcrProvider.js',
+                '/dist-electron/electron/ocr/providers/WindowsOcrProvider.js',
+                '/dist-electron/electron/ocr/providers/TesseractOcrProvider.js'
+            )
+            foreach ($entry in $expected) {
+                if ($asarOutput -match [regex]::Escape($entry)) {
+                    Success "Packaged OCR module: $entry"
+                } else {
+                    Fail "Missing OCR module from packaged asar: $entry"
+                }
+            }
+            if ($asarOutput -match '/node_modules/tesseract\.js/package\.json') {
+                Success "Packaged Tesseract.js fallback present"
+            } else {
+                Warn "Packaged Tesseract.js fallback missing — OCR cascade will rely on Windows.Media.Ocr only"
+            }
+        } catch {
+            Warn "asar list failed: $_"
+        }
+        break
+    }
+}
+
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 8: Install & Verify                                       ║
 # ╚═══════════════════════════════════════════════════════════════════╝

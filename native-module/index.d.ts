@@ -8,6 +8,24 @@ export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
 /**
+ * Run Apple Vision OCR on the image at `image_path`.
+ *
+ * Returns the recognized text as a single string with newline-separated
+ * lines, ordered top-to-bottom as Vision reports them. Returns an empty
+ * string when no text is found. Errors include the literal phrase
+ * "Unsupported on this platform" on non-macOS so the TS-side cascade
+ * can pattern-match and skip cleanly without logging at warn level.
+ */
+export declare function recognizeTextMacos(imagePath: string): string
+/**
+ * Run Windows.Media.Ocr on the image at `image_path`.
+ *
+ * Same contract as `recognize_text_macos`. Errors with "Unsupported on this
+ * platform" on non-Windows so the cascade falls through to the next
+ * provider (Tesseract) cleanly.
+ */
+export declare function recognizeTextWindows(imagePath: string): string
+/**
  * Represents information about a visible window.
  * Used by the Electron side for capture detection instead of spawning Python.
  */

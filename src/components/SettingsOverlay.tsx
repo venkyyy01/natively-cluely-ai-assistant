@@ -349,10 +349,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     
 const { shortcuts, updateShortcut, resetShortcuts } = useShortcuts();
 const globalShortcutAlternates: Record<string, string> = {
-    toggleVisibility: 'Alt: F13',
-    takeScreenshot: 'Alt: F14',
+    toggleVisibility: 'Alt: ⌘⇧Space, F13',
+    takeScreenshot: 'Alt: ⌘⇧\\, F14',
     selectiveScreenshot: 'Alt: F15',
-    toggleClickthrough: 'Alt: Cmd+Option+Shift+M',
+    toggleClickthrough: 'Alt: ⌘⌥⇧M',
+    toggleCursorHook: '⌘⇧-',
 };
   const [isUndetectable, setIsUndetectable] = useState(false);
   const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');
@@ -2139,6 +2140,18 @@ handleAiLanguageChange={handleAiLanguageChange}
                                                         <div className="flex flex-col">
                                                             <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Toggle Clickthrough</span>
                                                             <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.toggleClickthrough}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="px-2.5 py-1 rounded-md border border-border-subtle text-[11px] text-text-tertiary bg-bg-subtle/30">
+                                                        Global only
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center justify-between py-1.5 group">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><MousePointerClick size={14} /></span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Toggle Cursor Stealth</span>
+                                                            <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.toggleCursorHook}</span>
                                                         </div>
                                                     </div>
                                                     <div className="px-2.5 py-1 rounded-md border border-border-subtle text-[11px] text-text-tertiary bg-bg-subtle/30">

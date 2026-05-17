@@ -396,7 +396,12 @@ mod macos_cursor {
             state,
         });
         let raw_ptr = Box::into_raw(ctx) as usize;
-        let stop = stop_signal;
+        // Clone the Arc so both the worker thread (move into closure) and
+        // the start-side timeout handler can flip the stop flag. Without
+        // this, the move below transfers ownership and we can't signal
+        // stop from the start path on a startup-timeout failure.
+        let stop = stop_signal.clone();
+        let stop_for_thread = stop_signal;
 
         let (tx, rx) = mpsc::channel::<std::result::Result<(), String>>();
 
@@ -453,7 +458,7 @@ mod macos_cursor {
                 let _ = tx.send(Ok(()));
 
                 loop {
-                    if stop.load(Ordering::Relaxed) {
+                    if stop_for_thread.load(Ordering::Relaxed) {
                         break;
                     }
                     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, 0);
@@ -467,10 +472,22 @@ mod macos_cursor {
             }
         });
 
-        match rx.recv_timeout(Duration::from_millis(200)) {
+        match rx.recv_timeout(Duration::from_millis(1000)) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => Err(napi::Error::from_reason(msg)),
-            Err(_) => Ok(()),
+            Err(_) => {
+                // The worker thread didn't report ready or fail within 1s.
+                // CGEventTapCreate itself runs in microseconds, so a real
+                // timeout means the spawn never made progress (e.g. the
+                // process was suspended). Treat as a startup failure so the
+                // JS-side controller surfaces a recoverable "permission
+                // denied / native start failed" state instead of pretending
+                // the hook is installed when nothing is intercepting events.
+                stop.store(true, Ordering::SeqCst);
+                Err(napi::Error::from_reason(
+                    "Cursor hook startup timed out before reporting status".to_string(),
+                ))
+            }
         }
     }
 }
@@ -783,7 +800,11 @@ mod windows_cursor {
         let raw_usize = raw as usize;
 
         let (tx, rx) = mpsc::channel::<std::result::Result<(), String>>();
-        let stop = stop_signal;
+        // Clone for the same reason as the macOS path: the worker thread
+        // owns the moved Arc, while the start-side timeout handler keeps a
+        // reference for signalling stop on startup failure.
+        let stop = stop_signal.clone();
+        let stop_for_thread = stop_signal;
         thread::spawn(move || {
             let ctx_ptr = raw_usize as *mut HookContext;
             unsafe {
@@ -811,7 +832,7 @@ mod windows_cursor {
                 let _ = tx.send(Ok(()));
 
                 let mut msg: MSG = MSG::default();
-                while !stop.load(Ordering::Relaxed) {
+                while !stop_for_thread.load(Ordering::Relaxed) {
                     let r = GetMessageW(&mut msg, None, 0, 0);
                     if r.0 == 0 || r.0 == -1 {
                         break;
@@ -829,10 +850,29 @@ mod windows_cursor {
             }
         });
 
-        match rx.recv_timeout(Duration::from_millis(500)) {
+        match rx.recv_timeout(Duration::from_millis(1000)) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => Err(napi::Error::from_reason(msg)),
-            Err(_) => Ok(()),
+            Err(_) => {
+                // The worker thread didn't report ready or fail within 1s.
+                // SetWindowsHookExW finishes in microseconds, so a real
+                // timeout means the worker thread didn't make progress.
+                // Surface as a startup failure (matches the macOS path) so
+                // the JS-side controller doesn't pretend the hook is
+                // installed when nothing is intercepting events.
+                //
+                // Caveat: if the thread was preempted between SetWindowsHookExW
+                // and storing its TID, we cannot wake its blocked GetMessageW
+                // from here (no TID = no PostThreadMessageW target). The stop
+                // flag is set so any later iteration will exit cleanly. The
+                // stuck case ends up bounded by process lifetime — same
+                // blast radius as before this fix, but now JS gets a clean
+                // error instead of a false success.
+                stop.store(true, Ordering::SeqCst);
+                Err(napi::Error::from_reason(
+                    "Cursor hook startup timed out before reporting status".to_string(),
+                ))
+            }
         }
     }
 

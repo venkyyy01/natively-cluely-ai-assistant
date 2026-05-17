@@ -2,14 +2,21 @@
  * NAT-301: ProblemExtractor — coding_problem_v1 extraction pipeline.
  *
  * Pipeline:
- *  1. Tesseract OCR via existing extractImageTextWithTesseract
- *  2. If active provider supports vision, parallel multimodal call for structured JSON
- *  3. JSON-merge (prefer multimodal, fall back to OCR-derived)
- *  4. SHA-256 cache by problemStatement
+ *  1. Native OCR cascade (Apple Vision on macOS, Windows OCR on Windows,
+ *     Tesseract.js as universal fallback) via the shared `OcrService`.
+ *  2. If active provider supports vision, parallel multimodal call for
+ *     structured JSON.
+ *  3. JSON-merge (prefer multimodal, fall back to OCR-derived).
+ *  4. SHA-256 cache by problemStatement.
+ *
+ * The cascade speeds up OCR ~50x on supported platforms (Apple Vision is
+ * ~80ms vs Tesseract's 3-10s) and improves accuracy on UI screenshots
+ * with mixed fonts. Tesseract.js is retained for Linux and as a last-
+ * resort fallback when native providers fail.
  */
 import crypto from 'crypto';
-import Tesseract from 'tesseract.js';
 import fs from 'fs';
+import { createOcrService, type OcrService } from '../ocr';
 import {
   CODING_PROBLEM_SCHEMA_VERSION,
   type CodingProblem,
@@ -130,6 +137,30 @@ export function isCodingProblemComplete(p: CodingProblem): boolean {
   return p.problemStatement.length >= 30 && p.examples.length >= 1;
 }
 
+/**
+ * Looser gate for partial extractions: returns true when raw OCR is
+ * present and looks like a coding-problem screenshot (contains coding /
+ * algorithm keywords, an example block, or constraint markers). Used
+ * by `ProcessingHelper.processScreenshots` to decide whether to push a
+ * partial extraction into SessionTracker for the conscious-mode coding
+ * path on text-only models. Conservative — false-negative > false-positive
+ * because injecting non-coding context into the A/B/C/D contract would
+ * derail the answer.
+ */
+export function hasPartialCodingSignal(p: CodingProblem): boolean {
+  if (!p.rawOcr || p.rawOcr.length < 30) return false;
+  if (p.examples.length >= 1) return true;
+  if (p.constraints.length >= 1) return true;
+  const text = p.rawOcr.toLowerCase();
+  const keywordHits = [
+    'example', 'input:', 'output:', 'constraint', 'leetcode',
+    'function ', 'class solution', 'def ', 'return',
+    'algorithm', 'time complexity', 'space complexity',
+    '[]', '{}', '=>', '->'
+  ].filter((kw) => text.includes(kw)).length;
+  return keywordHits >= 2;
+}
+
 /** Parse vision LLM output into a partial CodingProblem. Never throws. */
 function parseVisionOutput(raw: string): Partial<CodingProblem> | null {
   try {
@@ -210,17 +241,51 @@ export async function extractCodingProblem(
   return result;
 }
 
+/**
+ * Lazily-initialised OCR cascade shared across coding-problem extractions
+ * within the lifetime of the process. Building it is cheap (no work happens
+ * until the first `recognize()` call) but keeping a single instance lets
+ * the per-provider availability cache survive between extractions.
+ */
+let cachedOcrService: OcrService | null = null;
+function getOcrServiceLazily(): OcrService {
+  if (!cachedOcrService) {
+    cachedOcrService = createOcrService();
+  }
+  return cachedOcrService;
+}
+
+/**
+ * Extract text from `imagePaths` for the coding-problem extraction
+ * pipeline. Despite the legacy name, this no longer goes straight to
+ * Tesseract — it walks the OcrService cascade (Apple Vision on macOS,
+ * Windows OCR on Windows, then Tesseract.js as the universal fallback).
+ *
+ * The cascade itself walks all providers internally and never throws,
+ * so we don't run an extra Tesseract pass after it returns empty —
+ * that would just repeat the call the cascade already attempted and
+ * doubles latency on a stuck image. Per-image errors surface as empty
+ * strings; we simply skip those chunks and keep the batch moving.
+ */
 async function runTesseract(imagePaths: string[], signal?: AbortSignal): Promise<string> {
   const chunks: string[] = [];
+  const ocr = getOcrServiceLazily();
+
   for (let i = 0; i < imagePaths.length; i++) {
     if (signal?.aborted) break;
+
+    let extracted = '';
     try {
-      const result = await Tesseract.recognize(imagePaths[i], 'eng');
-      const text = (result?.data?.text ?? '').trim();
-      if (text) chunks.push(text);
-    } catch {
-      // Best effort
+      const result = await ocr.recognize(imagePaths[i], { signal });
+      extracted = result.text.trim();
+    } catch (err) {
+      // OcrService.recognize is documented as never throwing; defend
+      // against future regressions by treating an escape as "skip this
+      // image" rather than aborting the whole extraction.
+      console.warn('[ProblemExtractor] OCR cascade threw unexpectedly:', err);
     }
+
+    if (extracted) chunks.push(extracted);
   }
   return chunks.join('\n\n');
 }

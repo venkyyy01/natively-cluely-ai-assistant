@@ -90,6 +90,13 @@ export interface SuggestionTrigger {
   lastQuestion: string;
   confidence: number;
   sourceUtteranceId?: string;
+  /**
+   * NAT-SCREENSHOT-AUTOATTACH: Screenshots queued before this trigger
+   * fired. Forwarded into `runWhatShouldISay` so the LLM gets visual
+   * context for live interview turns where the user pre-captured a
+   * coderpad / editor before the question landed.
+   */
+  imagePaths?: string[];
 }
 
 // Context item matching Swift ContextManager structure

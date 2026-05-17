@@ -118,6 +118,7 @@ const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
 // 16kHz * 2 bytes/sample * 1 channel * 0.125 seconds = 4000 bytes
 // Lowered from 16000 to allow short command utterances ("Yes", "Stop") to flush instantly.
 const MIN_BUFFER_BYTES = 4000;
+const OUTPUT_CHANNELS = 1;
 
 // Safety-net upload interval (ms). Primary flush is triggered by speech_ended events.
 // This fires as a backstop if someone talks continuously for >10s without any pause,
@@ -284,7 +285,6 @@ export class RestSTT extends EventEmitter {
         // Grab current buffer and reset
         const currentChunks = this.chunks;
         this.chunks = [];
-        const currentBytes = this.totalBufferedBytes;
         this.totalBufferedBytes = 0;
 
         // Concatenate all chunks
@@ -421,10 +421,10 @@ export class RestSTT extends EventEmitter {
         buffer.write('fmt ', 12);
         buffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
         buffer.writeUInt16LE(1, 20);  // AudioFormat (1 = PCM)
-        buffer.writeUInt16LE(this.numChannels, 22);  // NumChannels
+        buffer.writeUInt16LE(OUTPUT_CHANNELS, 22);  // NumChannels
         buffer.writeUInt32LE(sampleRate, 24); // SampleRate
-        buffer.writeUInt32LE(sampleRate * this.numChannels * (this.bitsPerSample / 8), 28); // ByteRate
-        buffer.writeUInt16LE(this.numChannels * (this.bitsPerSample / 8), 32); // BlockAlign
+        buffer.writeUInt32LE(sampleRate * OUTPUT_CHANNELS * (this.bitsPerSample / 8), 28); // ByteRate
+        buffer.writeUInt16LE(OUTPUT_CHANNELS * (this.bitsPerSample / 8), 32); // BlockAlign
         buffer.writeUInt16LE(this.bitsPerSample, 34); // BitsPerSample
         // data sub-chunk
         buffer.write('data', 36);

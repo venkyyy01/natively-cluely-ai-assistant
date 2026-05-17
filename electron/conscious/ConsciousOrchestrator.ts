@@ -782,6 +782,14 @@ export class ConsciousOrchestrator {
     turnPlan?: ConsciousTurnPlan;
     /** NAT-304: When set, prepends <problem_context> block to the Tier-A prompt. */
     codingProblem?: CodingProblem | null;
+    /**
+     * Caller-provided abort signal so a cancelled what-to-say turn
+     * shortcircuits the OCR cascade and the structured-reasoning stream
+     * instead of running them to completion off-thread. Optional for
+     * backwards compatibility with test fixtures that hand-roll the
+     * orchestrator.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -789,11 +797,23 @@ export class ConsciousOrchestrator {
 
     const degradedMode = this.isCircuitOpen();
 
-    // NAT-304: Prepend problem context only when extraction is complete (has examples).
+    // NAT-304: Prepend problem context when extraction is complete (has examples).
     // Guards against injecting the A/B/C/D coding protocol for theory/generic screenshots.
-    const problemContextBlock = input.codingProblem && isCodingProblemComplete(input.codingProblem)
-      ? this.answerPlanner.buildProblemContextBlock(input.codingProblem)
-      : '';
+    //
+    // NAT-OCR-1 extension: when extraction is *partial* (vision-LLM merge
+    // failed because the active model is text-only — Groq / Cerebras /
+    // Ollama / cURL-no-image) but raw OCR is present, surface the OCR
+    // text in a degraded `<problem_context_partial>` block instead of
+    // dropping the context entirely. This keeps the structured A/B/C/D
+    // contract even when the screenshot can never reach a vision LLM.
+    let problemContextBlock = '';
+    if (input.codingProblem) {
+      if (isCodingProblemComplete(input.codingProblem)) {
+        problemContextBlock = this.answerPlanner.buildProblemContextBlock(input.codingProblem);
+      } else if (input.codingProblem.rawOcr && input.codingProblem.rawOcr.length >= 30) {
+        problemContextBlock = this.answerPlanner.buildPartialOcrProblemContextBlock(input.codingProblem);
+      }
+    }
     const transcriptWithContext = problemContextBlock
       ? `${problemContextBlock}\n\n${input.preparedTranscript}`
       : input.preparedTranscript;
@@ -816,6 +836,7 @@ export class ConsciousOrchestrator {
               console.log(`[ConsciousOrchestrator] Early reasoning: "${text.substring(0, 60)}..."`);
               input.onEarlyReasoning?.(text);
             },
+            abortSignal: input.abortSignal,
           }
         );
       } else if (input.answerLLM) {

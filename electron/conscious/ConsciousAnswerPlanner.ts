@@ -413,6 +413,46 @@ export class ConsciousAnswerPlanner {
     ].filter((l) => l !== null).join('\n');
   }
 
+  /**
+   * Degraded variant of `buildProblemContextBlock` for the case where
+   * coding-problem extraction is partial (OCR succeeded, vision-LLM
+   * structured-JSON merge did not). Used only by the conscious-mode
+   * coding path on text-only models (Groq / Cerebras / Ollama / cURL-no-
+   * image) where the live screenshot has been replaced by OCR text.
+   *
+   * Surfaces `rawOcr` verbatim alongside whatever fields the OCR
+   * heuristics did manage to populate (title, difficulty, examples). The
+   * block tells the model the input is OCR-derived so it knows to
+   * tolerate noise and reconstruct missing structure.
+   */
+  buildPartialOcrProblemContextBlock(problem: CodingProblem): string {
+    const examples = problem.examples
+      .slice(0, 3)
+      .map((e, i) => `  Example ${i + 1}: Input=${e.input}, Output=${e.output}${e.explanation ? `, Explanation=${e.explanation}` : ''}`)
+      .join('\n');
+    const constraints = problem.constraints.slice(0, 8).map((c) => `  - ${c}`).join('\n');
+    const rawOcrSnippet = (problem.rawOcr ?? problem.problemStatement ?? '').slice(0, 4000);
+    return [
+      '<problem_context_partial>',
+      `TITLE: ${problem.title}`,
+      `DIFFICULTY: ${problem.difficulty}`,
+      `TYPE: ${problem.problemType}`,
+      'EXTRACTION_MODE: ocr_only (vision-LLM structured-JSON merge unavailable on this model)',
+      '',
+      'OCR_TEXT (verbatim, may contain character-level noise — silently correct obvious errors):',
+      rawOcrSnippet,
+      examples ? `\nEXTRACTED_EXAMPLES (best-effort regex over OCR — verify against the OCR text above):\n${examples}` : '',
+      constraints ? `\nEXTRACTED_CONSTRAINTS (best-effort):\n${constraints}` : '',
+      '',
+      'REQUIRED ANSWER STRUCTURE (A/B/C/D):',
+      'A. Problem Understanding — task, inputs/outputs, constraints, tricky cases, what the interviewer is evaluating',
+      'B. Brute-Force — intuition, why it works, full working code, time/space complexity + reasoning',
+      'C. Optimized — why brute force insufficient, optimization insight, data structure choice, full working code, time/space complexity + reasoning',
+      'D. Tradeoffs & Interview Reasoning — why optimized is preferred, alternatives, data-structure rationale, 2 common follow-ups',
+      '</problem_context_partial>',
+    ].filter((l) => l !== '').join('\n');
+  }
+
   buildContextBlock(plan: ConsciousAnswerPlan): string {
     const shapeGuide = this.describeShape(plan.answerShape);
     const modeGuide = this.describeMode(plan.questionMode);
