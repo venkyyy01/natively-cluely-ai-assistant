@@ -6,30 +6,27 @@ type WindowLike = {
 };
 
 export interface WindowFacadeDeps {
-	getSettingsWindow: () => WindowLike | null;
-	setSettingsWindowDimensions: (
-		window: WindowLike,
-		width: number,
-		height: number,
-	) => void;
-	getOverlayWindow: () => WindowLike | null;
-	getLauncherContentWindow: () => WindowLike | null;
-	setOverlayDimensions: (width: number, height: number) => void;
-	setWindowMode: (mode: "launcher" | "overlay") => void;
-	setOverlayClickthrough: (enabled: boolean) => void;
-	toggleMainWindow: () => void;
-	showMainWindow: () => void;
-	hideMainWindow: () => void;
-	moveWindowLeft: () => void;
-	moveWindowRight: () => void;
-	moveWindowUp: () => void;
-	moveWindowDown: () => void;
-	centerAndShowWindow: () => void;
-	toggleSettingsWindow: (x?: number, y?: number) => void;
-	closeSettingsWindow: () => void;
-	showModelSelectorWindow: (x: number, y: number) => void;
-	hideModelSelectorWindow: () => void;
-	toggleModelSelectorWindow: (x: number, y: number) => void;
+  getSettingsWindow: () => WindowLike | null;
+  setSettingsWindowDimensions: (window: WindowLike, width: number, height: number) => void;
+  getOverlayWindow: () => WindowLike | null;
+  getLauncherContentWindow: () => WindowLike | null;
+  setOverlayDimensions: (width: number, height: number) => void;
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => void;
+  setWindowMode: (mode: 'launcher' | 'overlay') => void;
+  setOverlayClickthrough: (enabled: boolean) => void;
+  toggleMainWindow: () => void;
+  showMainWindow: () => void;
+  hideMainWindow: () => void;
+  moveWindowLeft: () => void;
+  moveWindowRight: () => void;
+  moveWindowUp: () => void;
+  moveWindowDown: () => void;
+  centerAndShowWindow: () => void;
+  toggleSettingsWindow: (x?: number, y?: number) => void;
+  closeSettingsWindow: () => void;
+  showModelSelectorWindow: (x: number, y: number) => void;
+  hideModelSelectorWindow: () => void;
+  toggleModelSelectorWindow: (x: number, y: number) => void;
 }
 
 export class WindowFacade {
@@ -79,9 +76,13 @@ export class WindowFacade {
 		this.deps.setOverlayClickthrough(enabled);
 	}
 
-	toggleMainWindow(): void {
-		this.deps.toggleMainWindow();
-	}
+  setOverlayBounds(bounds: { width: number; height: number; x?: number; y?: number }): void {
+    this.deps.setOverlayBounds(bounds);
+  }
+
+  toggleMainWindow(): void {
+    this.deps.toggleMainWindow();
+  }
 
 	showMainWindow(): void {
 		this.deps.showMainWindow();

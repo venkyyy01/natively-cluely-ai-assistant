@@ -305,24 +305,24 @@ export function registerSettingsHandlers({
 		}
 	});
 
-	safeHandleValidated(
-		"set-acceleration-mode",
-		(args) =>
-			[
-				parseIpcInput(ipcSchemas.booleanFlag, args[0], "set-acceleration-mode"),
-			] as const,
-		async (_event, enabled) => {
-			try {
-				const settingsFacade = getSettingsFacade(appState);
-				const result = settingsFacade?.setAccelerationModeEnabled
-					? settingsFacade.setAccelerationModeEnabled(enabled)
-					: appState.setAccelerationModeEnabled(enabled);
-				if (result === false) {
-					return settingsError(
-						"SETTINGS_PERSIST_FAILED",
-						"Unable to persist Acceleration Mode",
-					);
-				}
+  safeHandle('get-privacy-shield-state', async () => {
+    try {
+      return settingsSuccess(appState.getPrivacyShieldState());
+    } catch (error: any) {
+      console.error('Error getting privacy shield state:', error);
+      return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Privacy Shield state');
+    }
+  });
+
+  safeHandleValidated('set-acceleration-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-acceleration-mode')] as const, async (_event, enabled) => {
+    try {
+      const settingsFacade = getSettingsFacade(appState);
+      const result = settingsFacade?.setAccelerationModeEnabled
+        ? settingsFacade.setAccelerationModeEnabled(enabled)
+        : appState.setAccelerationModeEnabled(enabled);
+      if (result === false) {
+        return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Acceleration Mode');
+      }
 
 				return settingsSuccess({ enabled });
 			} catch (error: any) {

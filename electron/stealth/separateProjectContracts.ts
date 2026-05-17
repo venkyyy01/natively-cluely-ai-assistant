@@ -111,11 +111,12 @@ export interface MacosLayer3Blocker {
 }
 
 export interface MacosLayer3ResponseEnvelope<T> {
-	outcome: MacosLayer3ControlPlaneOutcome;
-	failClosed: boolean;
-	presentationAllowed: boolean;
-	blockers: MacosLayer3Blocker[];
-	data: T;
+  outcome: MacosLayer3ControlPlaneOutcome;
+  failClosed: boolean;
+  presentationAllowed: boolean;
+  blockers: MacosLayer3Blocker[];
+  data: T;
+  nonce?: string;
 }
 
 export interface MacosLayer3CapabilityReport {

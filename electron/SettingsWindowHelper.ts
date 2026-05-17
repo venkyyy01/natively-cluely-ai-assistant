@@ -1,15 +1,9 @@
-import path from "node:path";
-import { app, BrowserWindow, screen } from "electron";
-import type { StealthManager } from "./stealth/StealthManager";
-import type { WindowHelper } from "./WindowHelper";
-
-const isEnvDev = process.env.NODE_ENV === "development";
-const isPackaged = app.isPackaged;
-const isDev = isEnvDev && !isPackaged;
-
-const startUrl = isDev
-	? "http://localhost:5180"
-	: `file://${path.join(app.getAppPath(), "dist", "index.html")}`;
+import { BrowserWindow, screen, app } from "electron"
+import { WindowHelper } from "./WindowHelper"
+import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 
 export class SettingsWindowHelper {
 	private settingsWindow: BrowserWindow | null = null;
@@ -40,8 +34,9 @@ export class SettingsWindowHelper {
 	private offsetX: number = 0;
 	private offsetY: number = 0;
 
-	private lastBlurTime: number = 0;
-	private ignoreBlur: boolean = false;
+    private lastBlurTime: number = 0
+    private ignoreBlur: boolean = false;
+    private detachRendererBridgeMonitor: (() => void) | null = null
 
 	constructor(stealthManager: StealthManager) {
 		this.stealthManager = stealthManager;
@@ -50,11 +45,12 @@ export class SettingsWindowHelper {
 	private applyStealth(enable: boolean): void {
 		if (!this.settingsWindow || this.settingsWindow.isDestroyed()) return;
 
-		this.stealthManager.applyToWindow(this.settingsWindow, enable, {
-			role: "auxiliary",
-			hideFromSwitcher: true,
-		});
-	}
+        this.stealthManager.applyToWindow(this.settingsWindow, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        });
+    }
 
 	public setIgnoreBlur(ignore: boolean): void {
 		this.ignoreBlur = ignore;
@@ -122,10 +118,40 @@ export class SettingsWindowHelper {
 		// Ensure fully visible on screen
 		this.ensureVisibleOnScreen();
 
-		if (process.platform === "win32" && this.contentProtection) {
-			this.settingsWindow.setOpacity(0);
-			this.settingsWindow.show();
-			this.applyStealth(true);
+        if (process.platform === 'win32' && this.contentProtection) {
+            this.stealthManager.setWindowOpacity(this.settingsWindow, 0, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.applyStealth(true);
+            
+            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+            this.opacityTimeout = setTimeout(() => {
+                if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
+                    this.stealthManager.setWindowOpacity(this.settingsWindow, 1, {
+                        source: 'SettingsWindowHelper.showWindow.win32.restore',
+                        windowRole: 'auxiliary',
+                    });
+                    this.stealthManager.reapplyAfterShow(this.settingsWindow);
+                    this.settingsWindow.focus();
+                }
+            }, 60);
+        } else {
+            this.applyStealth(this.contentProtection);
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.reapplyAfterShow(this.settingsWindow);
+            this.settingsWindow.focus();
+        }
+        
+        this.emitVisibilityChange(true);
+    }
 
 			if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
 			this.opacityTimeout = setTimeout(() => {
@@ -153,18 +179,42 @@ export class SettingsWindowHelper {
 		)
 			return;
 
-		const newX = mainBounds.x + this.offsetX;
-		const newY = mainBounds.y + mainBounds.height + this.offsetY;
+    public closeWindow(): void {
+        if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
+            this.stealthManager.requestWindowHide(this.settingsWindow, {
+                source: 'SettingsWindowHelper.closeWindow',
+                windowRole: 'auxiliary',
+            })
+            this.emitVisibilityChange(false);
+        }
+    }
 
 		this.settingsWindow.setPosition(Math.round(newX), Math.round(newY));
 	}
 
-	public closeWindow(): void {
-		if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-			this.settingsWindow.hide();
-			this.emitVisibilityChange(false);
-		}
-	}
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+  const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 200, // Match React component width
+    height: 238, // Increased to accommodate new Transcript toggle
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      backgroundThrottling: false // Keep window ready even when hidden
+    }
+  }
 
 	private emitVisibilityChange(isVisible: boolean): void {
 		const mainWindow = BrowserWindow.getAllWindows().find(
@@ -175,30 +225,25 @@ export class SettingsWindowHelper {
 		}
 	}
 
-	private createWindow(
-		x?: number,
-		y?: number,
-		showWhenReady: boolean = true,
-	): void {
-		const windowSettings: Electron.BrowserWindowConstructorOptions = {
-			width: 200, // Match React component width
-			height: 238, // Increased to accommodate new Transcript toggle
-			frame: false,
-			transparent: true,
-			resizable: false,
-			fullscreenable: false,
-			hasShadow: false,
-			alwaysOnTop: true,
-			backgroundColor: "#00000000",
-			show: false,
-			skipTaskbar: true,
-			webPreferences: {
-				nodeIntegration: false,
-				contextIsolation: true,
-				preload: path.join(__dirname, "preload.js"),
-				backgroundThrottling: false, // Keep window ready even when hidden
-			},
-		};
+        this.settingsWindow = new BrowserWindow(windowSettings)
+        // S-RACE-1: apply Layer-0 capture protection synchronously before any
+        // loadURL / setVisibleOnAllWorkspaces call so the window is born
+        // protected.
+        this.stealthManager.applyInitialStealth(this.settingsWindow, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        })
+        this.stealthManager.recordProtectionEvent('window-created', {
+            source: 'SettingsWindowHelper.createWindow',
+            windowRole: 'auxiliary',
+            visible: false,
+        })
+        this.detachRendererBridgeMonitor?.()
+        this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Settings', this.settingsWindow, {
+            expectedPreloadPath: preloadPath,
+            url: `${startUrl}?window=settings`,
+        })
 
 		if (x !== undefined && y !== undefined) {
 			windowSettings.x = Math.round(x);
@@ -207,13 +252,7 @@ export class SettingsWindowHelper {
 
 		this.settingsWindow = new BrowserWindow(windowSettings);
 
-		if (process.platform === "darwin") {
-			this.settingsWindow.setVisibleOnAllWorkspaces(true, {
-				visibleOnFullScreen: true,
-			});
-			this.settingsWindow.setHiddenInMissionControl(true);
-			this.settingsWindow.setAlwaysOnTop(true, "floating");
-		}
+        const settingsUrl = `${startUrl}?window=settings`
 
 		console.log(
 			`[SettingsWindowHelper] Creating Settings Window with Content Protection: ${this.contentProtection}`,
@@ -229,14 +268,11 @@ export class SettingsWindowHelper {
 			console.error("[SettingsWindowHelper] Failed to load URL:", e);
 		});
 
-		this.settingsWindow.once("ready-to-show", () => {
-			if (showWhenReady) {
-				this.showWindow(
-					this.settingsWindow?.getBounds().x || 0,
-					this.settingsWindow?.getBounds().y || 0,
-				);
-			}
-		});
+        this.settingsWindow.on('closed', () => {
+            this.detachRendererBridgeMonitor?.();
+            this.detachRendererBridgeMonitor = null;
+        })
+
 
 		// Hide on blur instead of close, to keep state?
 		// Or just let user close it.

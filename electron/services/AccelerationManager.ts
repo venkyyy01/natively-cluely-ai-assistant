@@ -65,37 +65,35 @@ export class AccelerationManager {
 	constructor() {
 		const flags = getOptimizationFlags();
 
-		this.promptCompiler = new PromptCompiler();
-		this.enhancedCache = new EnhancedCache({
-			maxMemoryMB: flags.maxCacheMemoryMB,
-			ttlMs: 5 * 60 * 1000,
-			enableSemanticLookup: flags.semanticCacheThreshold > 0,
-			similarityThreshold: flags.semanticCacheThreshold,
-		});
-		this.workerPool = new WorkerPool({ size: flags.workerThreadCount });
-		this.runtimeBudgetScheduler = new RuntimeBudgetScheduler({
-			workerPool: this.workerPool,
-			laneBudgets: flags.laneBudgets,
-		});
-		this.parallelAssembler = new ParallelContextAssembler({
-			workerThreadCount: flags.workerThreadCount,
-			workerPool: this.workerPool,
-		});
-		this.adaptiveWindow = new AdaptiveContextWindow();
-		this.consciousOrchestrator = new ConsciousAccelerationOrchestrator({
-			maxPrefetchPredictions: flags.maxPrefetchPredictions,
-			maxMemoryMB: flags.maxCacheMemoryMB,
-			budgetScheduler: this.runtimeBudgetScheduler,
-			classifierLane: this.runtimeBudgetScheduler,
-		});
-		this.aneProvider = new ANEEmbeddingProvider();
-		if (!AccelerationManager.sharedLocalEmbeddingProvider) {
-			AccelerationManager.sharedLocalEmbeddingProvider =
-				new LocalEmbeddingProvider();
-		}
-		this.localEmbeddingProvider =
-			AccelerationManager.sharedLocalEmbeddingProvider;
-	}
+    this.promptCompiler = new PromptCompiler();
+    this.enhancedCache = new EnhancedCache({
+      maxMemoryMB: flags.maxCacheMemoryMB,
+      ttlMs: 5 * 60 * 1000,
+      enableSemanticLookup: flags.semanticCacheThreshold > 0,
+      similarityThreshold: flags.semanticCacheThreshold,
+    });
+    this.workerPool = new WorkerPool({ size: flags.workerThreadCount });
+    this.runtimeBudgetScheduler = new RuntimeBudgetScheduler({
+      workerPool: this.workerPool,
+      laneBudgets: flags.laneBudgets,
+    });
+    this.parallelAssembler = new ParallelContextAssembler({
+      workerThreadCount: flags.workerThreadCount,
+      workerPool: this.workerPool,
+    });
+    this.adaptiveWindow = new AdaptiveContextWindow();
+    this.consciousOrchestrator = new ConsciousAccelerationOrchestrator({
+      maxPrefetchPredictions: flags.maxPrefetchPredictions,
+      maxMemoryMB: flags.maxCacheMemoryMB,
+      budgetScheduler: this.runtimeBudgetScheduler,
+      classifierLane: this.runtimeBudgetScheduler,
+    });
+    this.aneProvider = ANEEmbeddingProvider.getSharedInstance();
+    if (!AccelerationManager.sharedLocalEmbeddingProvider) {
+      AccelerationManager.sharedLocalEmbeddingProvider = new LocalEmbeddingProvider();
+    }
+    this.localEmbeddingProvider = AccelerationManager.sharedLocalEmbeddingProvider;
+  }
 
 	setConsciousModeEnabled(enabled: boolean): void {
 		this.consciousOrchestrator.setEnabled(enabled);
@@ -156,9 +154,19 @@ export class AccelerationManager {
 		console.log("[AccelerationManager] Initialized with acceleration modules");
 	}
 
-	getPromptCompiler(): PromptCompiler {
-		return this.promptCompiler;
-	}
+  activate(): void {
+    this.registerEmbeddingProvider();
+  }
+
+  deactivate(): void {
+    this.clearCaches();
+    this.consciousOrchestrator.setEnabled(false);
+    setEmbeddingProvider(null);
+  }
+
+  getPromptCompiler(): PromptCompiler {
+    return this.promptCompiler;
+  }
 
 	getEnhancedCache(): EnhancedCache<string, unknown> {
 		return this.enhancedCache;
@@ -209,18 +217,31 @@ export class AccelerationManager {
 		this.consciousOrchestrator.clearState();
 	}
 
-	getModules(): AccelerationModules {
-		return {
-			promptCompiler: this.promptCompiler,
-			streamManager: null,
-			enhancedCache: this.enhancedCache,
-			parallelAssembler: this.parallelAssembler,
-			adaptiveWindow: this.adaptiveWindow,
-			aneProvider: this.aneProvider,
-			stealthManager: null,
-			consciousOrchestrator: this.consciousOrchestrator,
-			workerPool: this.workerPool,
-			runtimeBudgetScheduler: this.runtimeBudgetScheduler,
-		};
-	}
+  /**
+   * NAT-101: Full teardown — deactivate + release ANE ONNX session.
+   * Called from AppState.cleanupForQuit() via before-quit hook.
+   */
+  async dispose(): Promise<void> {
+    this.deactivate();
+    try {
+      await this.aneProvider.dispose();
+    } catch (err) {
+      console.warn('[AccelerationManager] ANE dispose error (swallowed):', err);
+    }
+  }
+
+  getModules(): AccelerationModules {
+    return {
+      promptCompiler: this.promptCompiler,
+      streamManager: null,
+      enhancedCache: this.enhancedCache,
+      parallelAssembler: this.parallelAssembler,
+      adaptiveWindow: this.adaptiveWindow,
+      aneProvider: this.aneProvider,
+      stealthManager: null,
+      consciousOrchestrator: this.consciousOrchestrator,
+      workerPool: this.workerPool,
+      runtimeBudgetScheduler: this.runtimeBudgetScheduler,
+    };
+  }
 }

@@ -29,14 +29,11 @@ const legalTransitions: Record<
 	},
 };
 
-export function transitionStealthState(
-	state: StealthState,
-	event: StealthTransitionEvent,
-): StealthState {
-	const nextState = legalTransitions[state][event];
-	if (!nextState) {
-		throw new Error(`Illegal stealth transition: ${state} -> ${event}`);
-	}
+export function transitionStealthState(state: StealthState, event: StealthTransitionEvent): StealthState {
+  const nextState = legalTransitions[state][event];
+  if (!nextState) {
+    return 'FAULT';
+  }
 
 	return nextState;
 }

@@ -1,0 +1,33 @@
+{
+  "row": {
+    "id": "chromium-gdm-protected",
+    "platform": "darwin",
+    "osVersion": "Darwin 25.3.0",
+    "appVersion": "local-dev",
+    "captureTool": "chromium-get-display-media",
+    "mode": "browser",
+    "monitors": 1,
+    "strict": true,
+    "surface": "protected-canary-surface",
+    "expectedResult": "hidden",
+    "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED",
+    "externalAppName": "Chromium",
+    "externalAppVersion": "unknown",
+    "externalCaptureMode": "getDisplayMedia"
+  },
+  "adapter": "browser-get-display-media",
+  "actualResult": "skipped",
+  "passed": false,
+  "reason": "browser getDisplayMedia adapter is explicit opt-in; set NATIVELY_CAPTURE_MATRIX_ENABLE_BROWSER_GDM=1 for release qualification",
+  "artifactPaths": {
+    "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/browser-get-display-media/browser-get-display-media-run/chromium-gdm-protected/metadata.json",
+    "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/browser-get-display-media/browser-get-display-media-run/chromium-gdm-protected/capture.log"
+  },
+  "artifactMetadata": {
+    "platform": "darwin",
+    "externalAppName": "Chromium",
+    "externalAppVersion": "unknown",
+    "externalCaptureMode": "getDisplayMedia",
+    "artifactProvided": false
+  }
+}

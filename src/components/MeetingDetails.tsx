@@ -8,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { getOptionalElectronMethod } from '../lib/electronApi';
 
 const formatTime = (ms: number) => {
     const date = new Date(ms);
@@ -60,6 +61,8 @@ interface MeetingDetailsProps {
 }
 
 const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting }) => {
+    const updateMeetingTitle = getOptionalElectronMethod('updateMeetingTitle');
+    const updateMeetingSummary = getOptionalElectronMethod('updateMeetingSummary');
     // We need local state for the meeting object to reflect optimistic updates
     const [meeting, setMeeting] = useState<Meeting>(initialMeeting);
     const [activeTab, setActiveTab] = useState<'summary' | 'transcript' | 'usage'>('summary');
@@ -131,8 +134,8 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
     // UPDATE HANDLERS
     const handleTitleSave = async (newTitle: string) => {
         setMeeting(prev => ({ ...prev, title: newTitle }));
-        if (window.electronAPI?.updateMeetingTitle) {
-            await window.electronAPI.updateMeetingTitle(meeting.id, newTitle);
+        if (updateMeetingTitle) {
+            await updateMeetingTitle(meeting.id, newTitle);
         }
     };
 
@@ -144,8 +147,8 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
                 overview: newOverview
             }
         }));
-        if (window.electronAPI?.updateMeetingSummary) {
-            await window.electronAPI.updateMeetingSummary(meeting.id, { overview: newOverview });
+        if (updateMeetingSummary) {
+            await updateMeetingSummary(meeting.id, { overview: newOverview });
         }
     };
 
@@ -164,8 +167,8 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
             }
         }));
 
-        if (window.electronAPI?.updateMeetingSummary) {
-            await window.electronAPI.updateMeetingSummary(meeting.id, { actionItems: newItems });
+        if (updateMeetingSummary) {
+            await updateMeetingSummary(meeting.id, { actionItems: newItems });
         }
     };
 
@@ -181,8 +184,8 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
             }
         }));
 
-        if (window.electronAPI?.updateMeetingSummary) {
-            await window.electronAPI.updateMeetingSummary(meeting.id, { keyPoints: newItems });
+        if (updateMeetingSummary) {
+            await updateMeetingSummary(meeting.id, { keyPoints: newItems });
         }
     };
 
@@ -292,7 +295,7 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
                                                         ...prev,
                                                         detailedSummary: { ...prev.detailedSummary!, actionItemsTitle: val }
                                                     }));
-                                                    window.electronAPI?.updateMeetingSummary(meeting.id, { actionItemsTitle: val });
+                                                    void updateMeetingSummary?.(meeting.id, { actionItemsTitle: val });
                                                 }}
                                                 tagName="h2"
                                                 className="text-lg font-semibold text-text-primary -ml-2 px-2 py-1 rounded-sm transition-colors"
@@ -337,7 +340,7 @@ ${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'No
                                                         ...prev,
                                                         detailedSummary: { ...prev.detailedSummary!, keyPointsTitle: val }
                                                     }));
-                                                    window.electronAPI?.updateMeetingSummary(meeting.id, { keyPointsTitle: val });
+                                                    void updateMeetingSummary?.(meeting.id, { keyPointsTitle: val });
                                                 }}
                                                 tagName="h2"
                                                 className="text-lg font-semibold text-text-primary -ml-2 px-2 py-1 rounded-sm transition-colors"

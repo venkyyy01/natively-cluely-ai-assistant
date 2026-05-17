@@ -1,21 +1,38 @@
-import { EventEmitter } from "events";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-import WebSocket from "ws";
-import { RECOGNITION_LANGUAGES } from "../config/languages";
+import { EventEmitter } from 'events';
+import WebSocket from 'ws';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 const ELEVENLABS_WS_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 
 export class ElevenLabsStreamingSTT extends EventEmitter {
-	private apiKey: string;
-	private ws: WebSocket | null = null;
-	private isActive = false;
-	private shouldReconnect = false;
-	private reconnectAttempts = 0;
-	private reconnectTimer: NodeJS.Timeout | null = null;
-	private inputSampleRate = 48000; // what the mic/system audio captures at
-	private targetSampleRate = 16000; // what ElevenLabs Scribe v2 requires
+    private apiKey: string;
+    private ws: WebSocket | null = null;
+    private isActive = false;
+    private shouldReconnect = false;
+    private reconnectAttempts = 0;
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private inputSampleRate = 48000; // what the mic/system audio captures at
+    private targetSampleRate = 16000; // what ElevenLabs Scribe v2 requires
+    
+    private buffer: Buffer[] = [];
+    // NAT-021 / audit R-11: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'elevenlabs' });
+    private isConnecting = false;
+    private isSessionReady = false;
+    private languageCode = 'en'; // Default to English
+    
+    private debugWriteStream: fs.WriteStream | null = null;
+    
+    // Chunk buffering properties (250ms @ 16k = 4000 samples)
+    private pcmAccumulator: Int16Array[] = [];
+    private pcmAccumulatorLen = 0;
+    private readonly SEND_THRESHOLD_SAMPLES = 4000;
+    
+    private debugMessageCount = 0;
 
 	private buffer: Buffer[] = [];
 	private isConnecting = false;
@@ -57,15 +74,39 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 		super();
 		this.apiKey = apiKey;
 
-		// Open a debug file only in development to avoid disk fill-up in production
-		this.ensureDebugWriteStream();
-	}
+    public start(): void {
+        if (this.isActive) return;     // Already active
+        if (this.isConnecting) return; // Already mid-connect (prevents double-connect race)
+        this.isActive = true;
+        this.shouldReconnect = true;
+        this.reconnectAttempts = 0;
+        this.ensureDebugWriteStream();
+        this.dropMetric.start(); // NAT-021
+        this.connect();
+    }
 
-	public setSampleRate(rate: number): void {
-		this.inputSampleRate = rate;
-		console.log(`[ElevenLabsStreaming] Input sample rate set to ${rate}Hz`);
-		// We always downsample to 16000Hz for ElevenLabs
-	}
+    public stop(): void {
+        this.shouldReconnect = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.ws) {
+            this.ws.removeAllListeners();
+            this.ws.close();
+            this.ws = null;
+        }
+        this.resetLiveSessionState(true);
+        this.buffer = [];
+        this.pcmAccumulator = [];
+        this.pcmAccumulatorLen = 0;
+        if (this.debugWriteStream) {
+            this.debugWriteStream.end();
+            this.debugWriteStream = null;
+        }
+        this.dropMetric.stop(); // NAT-021
+        console.log('[ElevenLabsStreaming] Stopped');
+    }
 
 	/** No-op - channel count is expected to be mono by ElevenLabs Scribe */
 	public setAudioChannelCount(_count: number): void {}
@@ -81,16 +122,13 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 				);
 				this.languageCode = newCode;
 
-				if (this.isActive) {
-					console.log(
-						"[ElevenLabsStreaming] Restarting session to apply new language...",
-					);
-					this.stop();
-					this.start();
-				}
-			}
-		}
-	}
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady) {
+            this.buffer.push(chunk);
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+                console.warn('[ElevenLabsStreaming] Buffer full — oldest audio chunk dropped.');
+            }
 
 	/** No-op - credentials passed via API key */
 	public setCredentials(_path: string): void {}
@@ -127,10 +165,15 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 		console.log("[ElevenLabsStreaming] Stopped");
 	}
 
-	public destroy(): void {
-		this.stop();
-		this.removeAllListeners();
-	}
+            if (this.inputSampleRate === this.targetSampleRate) {
+                // No downsampling needed
+                outputS16 = inputS16;
+            } else {
+                // Legacy path: native NAT-043 resample should make inputSampleRate === 16000.
+                // Downsample from inputSampleRate (e.g. 48000) to 16000Hz
+                const downsampleFactor = this.inputSampleRate / this.targetSampleRate;
+                const outputLength = Math.floor(inputS16.length / downsampleFactor);
+                outputS16 = new Int16Array(outputLength);
 
 	/**
 	 * Write raw PCM audio data.

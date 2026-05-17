@@ -110,10 +110,55 @@ test("Soniox buffers audio before open and lazily reconnects after a clean close
 	}
 });
 
-test("ElevenLabs buffers during connect and lazily reconnects after a clean close", async () => {
-	const restoreWs = installWebSocketMock();
-	const originalSetTimeout = global.setTimeout;
-	const originalClearTimeout = global.clearTimeout;
+test('Soniox ignores stale socket callbacks after an in-place restart', async () => {
+  const restoreWs = installWebSocketMock();
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+
+  (global as any).setInterval = () => 1;
+  (global as any).clearInterval = () => {};
+
+  const modulePath = require.resolve('../audio/SonioxStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { SonioxStreamingSTT } = await import('../audio/SonioxStreamingSTT');
+    const stt = new SonioxStreamingSTT('test-key');
+    const transcripts: string[] = [];
+    stt.on('transcript', (segment) => {
+      transcripts.push(segment.text);
+    });
+
+    stt.start();
+    assert.equal(FakeWebSocket.instances.length, 1);
+    const firstSocket = FakeWebSocket.instances[0]!;
+    firstSocket.open();
+
+    stt.setRecognitionLanguage('spanish');
+    assert.equal(FakeWebSocket.instances.length, 2);
+    const secondSocket = FakeWebSocket.instances[1]!;
+    secondSocket.open();
+
+    firstSocket.emit('message', Buffer.from(JSON.stringify({
+      tokens: [{ text: 'stale text', is_final: true }],
+    })));
+    firstSocket.closeWith(1006, 'stale-close');
+
+    assert.equal((stt as any).ws, secondSocket);
+    assert.deepEqual(transcripts, []);
+
+    stt.stop();
+  } finally {
+    restoreWs();
+    (global as any).setInterval = originalSetInterval;
+    (global as any).clearInterval = originalClearInterval;
+  }
+});
+
+test('ElevenLabs buffers during connect and lazily reconnects after a clean close', async () => {
+  const restoreWs = installWebSocketMock();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
 
 	(global as any).setTimeout = (fn: () => void) => {
 		return { fn };

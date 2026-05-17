@@ -7,13 +7,13 @@ import {
 import { WhatToAnswerLLM } from "../llm/WhatToAnswerLLM";
 
 type CapturedCall = {
-	message: string;
-	prompt?: string;
-	options?: {
-		skipKnowledgeInterception?: boolean;
-		abortSignal?: AbortSignal;
-		qualityTier?: "fast" | "standard" | "structured_reasoning";
-	};
+  message: string;
+  prompt?: string;
+  options?: {
+    skipKnowledgeInterception?: boolean;
+    abortSignal?: AbortSignal;
+    qualityTier?: 'fast' | 'quality' | 'verify';
+  };
 };
 
 class CapturingLLMHelper {
@@ -51,11 +51,11 @@ test("WhatToAnswerLLM reasoning-first uses conscious structured routing options"
 		"How would you design this?",
 	);
 
-	assert.equal(result.mode, "reasoning_first");
-	assert.equal(helper.calls.length, 1);
-	assert.equal(helper.calls[0].prompt, CONSCIOUS_REASONING_SYSTEM_PROMPT);
-	assert.equal(helper.calls[0].options?.skipKnowledgeInterception, true);
-	assert.equal(helper.calls[0].options?.qualityTier, "structured_reasoning");
+  assert.equal(result.mode, 'reasoning_first');
+  assert.equal(helper.calls.length, 1);
+  assert.equal(helper.calls[0].prompt, CONSCIOUS_REASONING_SYSTEM_PROMPT);
+  assert.equal(helper.calls[0].options?.skipKnowledgeInterception, true);
+  assert.equal(helper.calls[0].options?.qualityTier, 'verify');
 });
 
 test("WhatToAnswerLLM selects the dedicated behavioral reasoning prompt for behavioral intents", async () => {

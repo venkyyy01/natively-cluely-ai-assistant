@@ -1,17 +1,28 @@
 // ScreenshotHelper.ts
 
-import fs from "node:fs";
-import path from "node:path";
-import { app } from "electron";
-import screenshot from "screenshot-desktop";
-import util from "util";
-import { v4 as uuidv4 } from "uuid";
+import path from "node:path"
+import fs from "node:fs"
+import { app } from "electron"
+import { v4 as uuidv4 } from "uuid"
+import { exec as cpExec } from "node:child_process"
 export class ScreenshotHelper {
-	private screenshotQueue: string[] = [];
-	private extraScreenshotQueue: string[] = [];
-	private readonly MAX_SCREENSHOTS = 5;
-	private readonly MAX_FILE_BYTES = 10 * 1024 * 1024;
-	private queueOp: Promise<void> = Promise.resolve();
+  private screenshotQueue: string[] = []
+  private extraScreenshotQueue: string[] = []
+  /**
+   * NAT-SCREENSHOT-FRESHNESS: Per-path capture timestamps so the
+   * auto-trigger path can filter out stale screenshots before attaching
+   * them to a fresh interviewer turn. Without this, screenshots taken
+   * minutes earlier (problem A) get attached to a brand-new question
+   * (problem B / behavioral / off-topic) and confuse the LLM.
+   *
+   * Map keys are the same path strings stored in the queues. Entries are
+   * removed in lockstep with `trimQueue` and `clearQueues` so the map
+   * never outgrows the queues themselves.
+   */
+  private screenshotCapturedAt = new Map<string, number>()
+  private readonly MAX_SCREENSHOTS = 5
+  private readonly MAX_FILE_BYTES = 10 * 1024 * 1024
+  private queueOp: Promise<void> = Promise.resolve()
 
 	private readonly screenshotDir: string;
 	private readonly extraScreenshotDir: string;
@@ -45,21 +56,22 @@ export class ScreenshotHelper {
 		);
 	}
 
-	private async withTimeout<T>(
-		promise: Promise<T>,
-		timeoutMs: number,
-		errorMessage: string,
-	): Promise<T> {
-		let timeoutId: NodeJS.Timeout;
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
-		});
-		try {
-			return await Promise.race([promise, timeoutPromise]);
-		} finally {
-			clearTimeout(timeoutId!);
-		}
-	}
+  private execWithKillOnTimeout(cmd: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = cpExec(cmd, (error) => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      })
+      const timer = setTimeout(() => {
+        try { child.kill() } catch { /* ignore kill errors */ }
+        reject(new Error(`Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`))
+      }, this.SCREENSHOT_TIMEOUT_MS)
+      child.on('exit', () => clearTimeout(timer))
+    })
+  }
 
 	private async withQueueLock<T>(operation: () => Promise<T>): Promise<T> {
 		const previous = this.queueOp;
@@ -76,19 +88,20 @@ export class ScreenshotHelper {
 		}
 	}
 
-	private async trimQueue(queue: string[]): Promise<void> {
-		await this.withQueueLock(async () => {
-			while (queue.length > this.MAX_SCREENSHOTS) {
-				const removedPath = queue.shift();
-				if (!removedPath) continue;
-				try {
-					await fs.promises.unlink(removedPath);
-				} catch (error) {
-					console.error("Error removing old screenshot:", error);
-				}
-			}
-		});
-	}
+  private async trimQueue(queue: string[]): Promise<void> {
+    await this.withQueueLock(async () => {
+      while (queue.length > this.MAX_SCREENSHOTS) {
+        const removedPath = queue.shift()
+        if (!removedPath) continue
+        this.screenshotCapturedAt.delete(removedPath)
+        try {
+          await fs.promises.unlink(removedPath)
+        } catch (error) {
+          console.error("Error removing old screenshot:", error)
+        }
+      }
+    })
+  }
 
 	private async enforceFileSizeLimit(screenshotPath: string): Promise<void> {
 		const stats = await fs.promises.stat(screenshotPath);
@@ -149,30 +162,53 @@ export class ScreenshotHelper {
 		return this.extraScreenshotQueue;
 	}
 
-	public clearQueues(): void {
-		// Clear screenshotQueue
-		this.screenshotQueue.forEach((screenshotPath) => {
-			fs.unlink(screenshotPath, (err) => {
-				if (err) {
-					// console.error(`Error deleting screenshot at ${screenshotPath}:`, err)
-				}
-			});
-		});
-		this.screenshotQueue = [];
+  public clearQueues(): void {
+    // Snapshot queue contents synchronously, then reset queues immediately so
+    // a concurrent takeScreenshot can't push into the array we are about to
+    // unlink. This is race-safe because JS is single-threaded — between the
+    // snapshot and reset there is no async point.
+    const toUnlink = [...this.screenshotQueue, ...this.extraScreenshotQueue];
+    this.screenshotQueue = [];
+    this.extraScreenshotQueue = [];
+    this.screenshotCapturedAt.clear();
+    for (const screenshotPath of toUnlink) {
+      fs.unlink(screenshotPath, (_err) => {
+        // best-effort; file may already be gone or held by reader
+      });
+    }
+  }
 
-		// Clear extraScreenshotQueue
-		this.extraScreenshotQueue.forEach((screenshotPath) => {
-			fs.unlink(screenshotPath, (err) => {
-				if (err) {
-					// console.error(
-					//   `Error deleting extra screenshot at ${screenshotPath}:`,
-					//   err
-					// )
-				}
-			});
-		});
-		this.extraScreenshotQueue = [];
-	}
+  /**
+   * NAT-SCREENSHOT-FRESHNESS: Return only screenshots captured within
+   * the last `withinMs` milliseconds. Used by the auto-trigger path to
+   * avoid attaching stale screenshots to a freshly-arrived interviewer
+   * turn.
+   *
+   * Falls back to filesystem mtime when we don't have a recorded
+   * timestamp (defensive — captures are always recorded today, but a
+   * future restore-from-disk path could repopulate the queue without
+   * timestamps and we don't want to silently treat those as fresh).
+   */
+  public getRecentScreenshots(withinMs: number, now: number = Date.now()): string[] {
+    if (withinMs <= 0) return [];
+    const cutoff = now - withinMs;
+    const all = [...this.screenshotQueue, ...this.extraScreenshotQueue];
+    return all.filter((p) => {
+      const recorded = this.screenshotCapturedAt.get(p);
+      if (recorded != null) {
+        return recorded >= cutoff;
+      }
+      // No recorded timestamp — fall back to mtime, but treat fs errors
+      // as "stale" (conservative) so we never attach a screenshot we
+      // can't prove is fresh.
+      try {
+        const stat = fs.statSync(p);
+        return stat.mtimeMs >= cutoff;
+      } catch {
+        return false;
+      }
+    });
+  }
 
 	public async takeScreenshot(
 		hideMainWindow: () => void,
@@ -185,64 +221,44 @@ export class ScreenshotHelper {
 
 			let screenshotPath = "";
 
-			const exec = util.promisify(require("child_process").exec);
-			const execWithTimeout = (cmd: string) =>
-				this.withTimeout(
-					Promise.resolve(exec(cmd)),
-					this.SCREENSHOT_TIMEOUT_MS,
-					`Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`,
-				);
+      if (this.view === "queue") {
+        screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
+        // Use native screencapture for reliability on macOS
+        // -x: do not play sound
+        // -C: capture cursor
+        try {
+          await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, false))
+        } catch (e: any) {
+          if (e.message?.includes('timed out')) throw e
+          const errorMsg = e.message || String(e)
+          if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+            throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+          }
+          throw e
+        }
+        await this.enforceFileSizeLimit(screenshotPath)
 
-			if (this.view === "queue") {
-				screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`);
-				// Use native screencapture for reliability on macOS
-				// -x: do not play sound
-				// -C: capture cursor
-				try {
-					await execWithTimeout(
-						this.getScreenshotCommand(screenshotPath, false),
-					);
-				} catch (e: any) {
-					if (e.message?.includes("timed out")) throw e;
-					const errorMsg = e.message || String(e);
-					if (
-						errorMsg.includes("could not create image") ||
-						errorMsg.includes("Screen Recording")
-					) {
-						throw new Error(
-							"Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.",
-						);
-					}
-					throw e;
-				}
-				await this.enforceFileSizeLimit(screenshotPath);
+        this.screenshotQueue.push(screenshotPath)
+        this.screenshotCapturedAt.set(screenshotPath, Date.now())
+        await this.trimQueue(this.screenshotQueue)
+      } else {
+        screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
+        try {
+          await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, false))
+        } catch (e: any) {
+          if (e.message?.includes('timed out')) throw e
+          const errorMsg = e.message || String(e)
+          if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+            throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+          }
+          throw e
+        }
+        await this.enforceFileSizeLimit(screenshotPath)
 
-				this.screenshotQueue.push(screenshotPath);
-				await this.trimQueue(this.screenshotQueue);
-			} else {
-				screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`);
-				try {
-					await execWithTimeout(
-						this.getScreenshotCommand(screenshotPath, false),
-					);
-				} catch (e: any) {
-					if (e.message?.includes("timed out")) throw e;
-					const errorMsg = e.message || String(e);
-					if (
-						errorMsg.includes("could not create image") ||
-						errorMsg.includes("Screen Recording")
-					) {
-						throw new Error(
-							"Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.",
-						);
-					}
-					throw e;
-				}
-				await this.enforceFileSizeLimit(screenshotPath);
-
-				this.extraScreenshotQueue.push(screenshotPath);
-				await this.trimQueue(this.extraScreenshotQueue);
-			}
+        this.extraScreenshotQueue.push(screenshotPath)
+        this.screenshotCapturedAt.set(screenshotPath, Date.now())
+        await this.trimQueue(this.extraScreenshotQueue)
+      }
 
 			return screenshotPath;
 		} catch (error) {
@@ -265,14 +281,7 @@ export class ScreenshotHelper {
 
 			await this.waitForWindowHide();
 
-			let screenshotPath = "";
-			const exec = util.promisify(require("child_process").exec);
-			const execWithTimeout = (cmd: string) =>
-				this.withTimeout(
-					Promise.resolve(exec(cmd)),
-					this.SCREENSHOT_TIMEOUT_MS,
-					`Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`,
-				);
+      let screenshotPath = ""
 
 			// Always use the standard queue directory for this temporary context
 			screenshotPath = path.join(
@@ -280,23 +289,18 @@ export class ScreenshotHelper {
 				`selective-${uuidv4()}.png`,
 			);
 
-			// -i: interactive mode (selection)
-			// -x: do not play sound
-			try {
-				await execWithTimeout(this.getScreenshotCommand(screenshotPath, true));
-			} catch (e: any) {
-				if (e.message?.includes("timed out")) throw e;
-				const errorMsg = e.message || String(e);
-				if (
-					errorMsg.includes("could not create image") ||
-					errorMsg.includes("Screen Recording")
-				) {
-					throw new Error(
-						"Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.",
-					);
-				}
-				throw new Error("Selection cancelled");
-			}
+      // -i: interactive mode (selection)
+      // -x: do not play sound
+      try {
+        await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, true))
+      } catch (e: any) {
+        if (e.message?.includes('timed out')) throw e
+        const errorMsg = e.message || String(e)
+        if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+          throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+        }
+        throw new Error("Selection cancelled")
+      }
 
 			// Verify file exists (user might have pressed Esc)
 			if (!fs.existsSync(screenshotPath)) {
@@ -305,8 +309,9 @@ export class ScreenshotHelper {
 
 			await this.enforceFileSizeLimit(screenshotPath);
 
-			this.screenshotQueue.push(screenshotPath);
-			await this.trimQueue(this.screenshotQueue);
+      this.screenshotQueue.push(screenshotPath)
+      this.screenshotCapturedAt.set(screenshotPath, Date.now())
+      await this.trimQueue(this.screenshotQueue)
 
 			return screenshotPath;
 		} catch (error) {
@@ -342,27 +347,23 @@ export class ScreenshotHelper {
 		);
 	}
 
-	public async deleteScreenshot(
-		path: string,
-	): Promise<{ success: boolean; error?: string }> {
-		try {
-			await fs.promises.unlink(path);
-			if (this.view === "queue") {
-				this.screenshotQueue = this.screenshotQueue.filter(
-					(filePath) => filePath !== path,
-				);
-			} else {
-				this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
-					(filePath) => filePath !== path,
-				);
-			}
-			return { success: true };
-		} catch (error) {
-			// console.error("Error deleting file:", error)
-			return {
-				success: false,
-				error: error instanceof Error ? error.message : String(error),
-			};
-		}
-	}
+  public async deleteScreenshot(
+    path: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      await fs.promises.unlink(path)
+      // Scan both queues — this.view may have changed between push and delete,
+      // and a path could legitimately exist in either bucket.
+      this.screenshotQueue = this.screenshotQueue.filter(
+        (filePath) => filePath !== path
+      )
+      this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
+        (filePath) => filePath !== path
+      )
+      return { success: true }
+    } catch (error) {
+      // console.error("Error deleting file:", error)
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
 }

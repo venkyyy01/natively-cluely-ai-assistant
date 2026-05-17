@@ -92,41 +92,37 @@ export function registerRagHandlers({
 			)
 				return ragSuccess({ fallback: true });
 
-			const abortController = new AbortController();
-			const queryKey = `meeting-${meetingId}`;
-			activeRAGQueries.set(queryKey, abortController);
+    const abortController = new AbortController();
+    const queryKey = `meeting-${meetingId}`;
+    // If a previous query is still active for this meeting, abort it so the
+    // map entry we are about to overwrite is properly torn down. Without
+    // this, the predecessor's finally block would later delete OUR entry.
+    const previous = activeRAGQueries.get(queryKey);
+    if (previous) previous.abort();
+    activeRAGQueries.set(queryKey, abortController);
 
-			try {
-				const stream = ragManager.queryMeeting(
-					meetingId,
-					query,
-					abortController.signal,
-				);
-				for await (const chunk of stream) {
-					if (abortController.signal.aborted) break;
-					event.sender.send("rag:stream-chunk", { meetingId, chunk });
-				}
-				event.sender.send("rag:stream-complete", { meetingId });
-				return ragSuccess({ success: true });
-			} catch (error: any) {
-				if (error.name !== "AbortError") {
-					const msg = error.message || "";
-					if (
-						msg.includes("NO_RELEVANT_CONTEXT") ||
-						msg.includes("NO_MEETING_EMBEDDINGS")
-					)
-						return ragSuccess({ fallback: true });
-					event.sender.send("rag:stream-error", { meetingId, error: msg });
-				}
-				return ragError(
-					"RAG_QUERY_FAILED",
-					error?.message || "Unable to query meeting context",
-				);
-			} finally {
-				activeRAGQueries.delete(queryKey);
-			}
-		},
-	);
+    try {
+      const stream = ragManager.queryMeeting(meetingId, query, abortController.signal);
+      for await (const chunk of stream) {
+        if (abortController.signal.aborted) break;
+        event.sender.send('rag:stream-chunk', { meetingId, chunk });
+      }
+      event.sender.send('rag:stream-complete', { meetingId });
+      return ragSuccess({ success: true });
+    } catch (error: any) {
+      if (error.name !== 'AbortError') {
+        const msg = error.message || '';
+        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return ragSuccess({ fallback: true });
+        event.sender.send('rag:stream-error', { meetingId, error: msg });
+      }
+      return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query meeting context');
+    } finally {
+      // Race-safe: only delete if the registered entry is STILL ours.
+      if (activeRAGQueries.get(queryKey) === abortController) {
+        activeRAGQueries.delete(queryKey);
+      }
+    }
+  });
 
 	safeHandleValidated(
 		"rag:query-live",

@@ -27,11 +27,15 @@ public final class StealthSurface {
             let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = true
             window.backgroundColor = .black
-            window.title = "FullStealth-\(sessionId)-\(surfaceId)"
+            // Use a generic title that won't identify the app if the window is
+            // somehow enumerated via CGWindowListCopyWindowInfo.
+            window.title = ""
             window.level = .screenSaver
-            window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .stationary]
+            window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .stationary, .ignoresCycle]
             window.sharingType = .none
             window.ignoresMouseEvents = true
+            window.isExcludedFromWindowsMenu = true
+            window.hidesOnDeactivate = false
 
             let contentView = NSView(frame: frame)
             contentView.wantsLayer = true

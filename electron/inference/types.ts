@@ -9,12 +9,14 @@ export type InferenceLaneStatus =
 	| "failed";
 
 export interface InferenceRequest {
-	requestId: string;
-	requestClass: InferenceRequestClass;
-	transcriptRevision: number;
-	contextSnapshot: string;
-	budgetDeadlineMs: number;
-	draft?: string | null;
+  requestId: string;
+  requestClass: InferenceRequestClass;
+  transcriptRevision: number;
+  contextSnapshot: string;
+  budgetDeadlineMs: number;
+  draft?: string | null;
+  /** NAT-057: when set with RouteDirector + quality route, race fast-draft vs quality (first valid wins). */
+  parallelCandidates?: boolean;
 }
 
 export interface RouteDecision {

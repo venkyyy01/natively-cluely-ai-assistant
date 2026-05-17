@@ -101,10 +101,52 @@ test("takeScreenshot resumes the stealth watchdog even when capture fails", asyn
 	}
 });
 
-test("takeSelectiveScreenshot resumes the stealth watchdog even when selection is canceled", async () => {
-	const restoreElectron = installElectronMock();
-	const originalNodeEnv = process.env.NODE_ENV;
-	process.env.NODE_ENV = "test";
+test('takeScreenshot fails closed during stealth containment before pausing watchdog', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const takeScreenshot = (AppState.prototype as unknown as {
+      takeScreenshot: (this: Record<string, any>) => Promise<string>;
+    }).takeScreenshot;
+
+    const calls: string[] = [];
+    const fakeState = Object.assign(Object.create(AppState.prototype), {
+      getMainWindow: () => ({ isDestroyed: () => false }),
+      isStealthContainmentActive: () => true,
+      stealthManager: {
+        pauseWatchdog() {
+          calls.push('pause');
+        },
+        resumeWatchdog() {
+          calls.push('resume');
+        },
+      },
+      windowHelper: {
+        getOverlayWindow: (): null => null,
+      },
+      screenshotHelper: {
+        async takeScreenshot() {
+          calls.push('capture');
+          return '/tmp/screenshot.png';
+        },
+      },
+    });
+
+    await assert.rejects(() => takeScreenshot.call(fakeState), /CONTAINMENT_ACTIVE/);
+    assert.deepEqual(calls, []);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('takeSelectiveScreenshot resumes the stealth watchdog even when selection is canceled', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
 
 	try {
 		const { AppState } = await import("../main");
@@ -146,4 +188,46 @@ test("takeSelectiveScreenshot resumes the stealth watchdog even when selection i
 		restoreElectron();
 		process.env.NODE_ENV = originalNodeEnv;
 	}
+});
+
+test('takeSelectiveScreenshot fails closed during stealth containment before pausing watchdog', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const takeSelectiveScreenshot = (AppState.prototype as unknown as {
+      takeSelectiveScreenshot: (this: Record<string, any>) => Promise<string>;
+    }).takeSelectiveScreenshot;
+
+    const calls: string[] = [];
+    const fakeState = Object.assign(Object.create(AppState.prototype), {
+      getMainWindow: () => ({ isDestroyed: () => false }),
+      isStealthContainmentActive: () => true,
+      stealthManager: {
+        pauseWatchdog() {
+          calls.push('pause');
+        },
+        resumeWatchdog() {
+          calls.push('resume');
+        },
+      },
+      windowHelper: {
+        getOverlayWindow: (): null => null,
+      },
+      screenshotHelper: {
+        async takeSelectiveScreenshot() {
+          calls.push('capture');
+          return '/tmp/screenshot.png';
+        },
+      },
+    });
+
+    await assert.rejects(() => takeSelectiveScreenshot.call(fakeState), /CONTAINMENT_ACTIVE/);
+    assert.deepEqual(calls, []);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });

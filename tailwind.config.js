@@ -5,15 +5,16 @@ export const content = [
 ];
 
 module.exports = {
-	content: ["./src/**/*.{js,jsx,ts,tsx}", "./premium/src/**/*.{js,jsx,ts,tsx}"],
-	theme: {
-		extend: {
-			colors: {
-				bg: {
-					primary: "var(--bg-primary)",
-					secondary: "var(--bg-secondary)",
-					elevated: "var(--bg-elevated)",
-					input: "var(--bg-input)",
+  content: ["./src/**/*.{js,jsx,ts,tsx}", "./premium/src/**/*.{js,jsx,ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        bg: {
+          primary: 'var(--bg-primary)',
+          secondary: 'var(--bg-secondary)',
+          tertiary: 'var(--bg-tertiary)',
+          elevated: 'var(--bg-elevated)',
+          input: 'var(--bg-input)',
 
 					/* New Semantic Tokens */
 					sidebar: "var(--bg-sidebar)",

@@ -50,18 +50,13 @@ const CONVERSATIONAL_PATTERN =
 	/(conversational|conversation|human|natural|talk like|sound like a person)/i;
 const CONCISE_PATTERN = /(concise|short|brief|crisp|to the point)/i;
 const INDIAN_ENGLISH_PATTERN = /indian english/i;
-const PLAIN_LANGUAGE_PATTERN =
-	/(no jargon|avoid jargon|simple words|plain english|plain language|no fancy words|avoid big words)/i;
-const AVOID_ROBOTIC_PATTERN =
-	/(robotic|ai|scripted|slide\s*show|slides|corporate)/i;
-const FRAMEWORK_PATTERN =
-	/(framework|format|structure|star|situation\b.*task\b.*action\b.*result|use this structure|follow this structure|follow this framework)/i;
-const BEHAVIORAL_SCOPE_PATTERN =
-	/(behavioral|story|star|situation|task|action|result|learning|tell me about a time|leadership|conflict)/i;
-const SYSTEM_DESIGN_SCOPE_PATTERN =
-	/(system design|architecture|design round|high level design|distributed|scal(?:e|ing))/i;
-const LIVE_CODING_SCOPE_PATTERN =
-	/(live coding|live-coding|coding round|write code|implement|function|leetcode|algorithm)/i;
+const PLAIN_LANGUAGE_PATTERN = /(no jargon|avoid jargon|simple words|plain english|plain language|no fancy words|avoid big words)/i;
+const AVOID_ROBOTIC_PATTERN = /(robotic|ai|scripted|slide\s*show|slides|corporate)/i;
+const FRAMEWORK_PATTERN = /(framework|format|structure|star|situation\b.*task\b.*action\b.*result|use this structure|follow this structure|follow this framework)/i;
+const BEHAVIORAL_SCOPE_PATTERN = /(behavioral|story|star|situation|task|action|result|learning|tell me about a time|leadership|conflict)/i;
+const SYSTEM_DESIGN_SCOPE_PATTERN = /(system design|architecture|design round|high level design|distributed|scal(?:e|ing))/i;
+const LIVE_CODING_SCOPE_PATTERN = /(live coding|live-coding|coding round|write code|implement|function|leetcode|algorithm)/i;
+const UNSAFE_DIRECTIVE_PATTERN = /(ignore\s+(all\s+)?(previous|prior|above|earlier)\s+instructions|disregard\s+(all\s+)?(previous|prior|above|earlier)\s+instructions|reveal\s+(the\s+)?(system|developer)\s+(prompt|message|instructions)|system\s+prompt|developer\s+message|jailbreak|act\s+as\s+(?:a|an|the)?\s*(different|uncensored|unrestricted)?\s*(ai|assistant|model))/i;
 
 function normalizeText(value: string): string {
 	return value
@@ -145,10 +140,14 @@ export class ConsciousResponsePreferenceStore {
 			return false;
 		}
 
-		const flags = collectFlags(rawText);
-		if (flags.length === 0) {
-			return false;
-		}
+    if (UNSAFE_DIRECTIVE_PATTERN.test(rawText)) {
+      return false;
+    }
+
+    const flags = collectFlags(rawText);
+    if (flags.length === 0) {
+      return false;
+    }
 
 		const normalizedText = normalizeText(rawText);
 		const directive: PersistedConsciousResponseDirective = {

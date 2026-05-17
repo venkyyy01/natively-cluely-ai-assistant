@@ -1,14 +1,8 @@
-import path from "node:path";
-import { app, BrowserWindow, screen } from "electron";
-import type { StealthManager } from "./stealth/StealthManager";
-
-const isEnvDev = process.env.NODE_ENV === "development";
-const isPackaged = app.isPackaged;
-const isDev = isEnvDev && !isPackaged;
-
-const startUrl = isDev
-	? "http://localhost:5180"
-	: `file://${path.join(app.getAppPath(), "dist", "index.html")}`;
+import { BrowserWindow, screen, app } from "electron"
+import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 
 import type { WindowHelper } from "./WindowHelper";
 
@@ -18,9 +12,10 @@ export class ModelSelectorWindowHelper {
 	private opacityTimeout: NodeJS.Timeout | null = null;
 	private readonly stealthManager: StealthManager;
 
-	// Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
-	private lastBlurTime: number = 0;
-	private ignoreBlur: boolean = false;
+    // Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
+    private lastBlurTime: number = 0
+    private ignoreBlur: boolean = false;
+    private detachRendererBridgeMonitor: (() => void) | null = null
 
 	constructor(stealthManager: StealthManager) {
 		this.stealthManager = stealthManager;
@@ -29,11 +24,12 @@ export class ModelSelectorWindowHelper {
 	private applyStealth(enable: boolean): void {
 		if (!this.window || this.window.isDestroyed()) return;
 
-		this.stealthManager.applyToWindow(this.window, enable, {
-			role: "auxiliary",
-			hideFromSwitcher: true,
-		});
-	}
+        this.stealthManager.applyToWindow(this.window, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        });
+    }
 
 	public setIgnoreBlur(ignore: boolean): void {
 		this.ignoreBlur = ignore;
@@ -83,26 +79,46 @@ export class ModelSelectorWindowHelper {
 		this.window.setPosition(Math.round(x), Math.round(y));
 		this.ensureVisibleOnScreen();
 
-		if (process.platform === "win32" && this.contentProtection) {
-			this.window.setOpacity(0);
-			this.window.show();
-			this.applyStealth(true);
+        if (process.platform === 'win32' && this.contentProtection) {
+            this.stealthManager.setWindowOpacity(this.window, 0, {
+                source: 'ModelSelectorWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.requestWindowShow(this.window, {
+                source: 'ModelSelectorWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.applyStealth(true);
+            
+            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+            this.opacityTimeout = setTimeout(() => {
+                if (this.window && !this.window.isDestroyed()) {
+                    this.stealthManager.setWindowOpacity(this.window, 1, {
+                        source: 'ModelSelectorWindowHelper.showWindow.win32.restore',
+                        windowRole: 'auxiliary',
+                    });
+                    this.stealthManager.reapplyAfterShow(this.window);
+                    this.window.focus();
+                }
+            }, 60);
+        } else {
+            this.applyStealth(this.contentProtection);
+            this.stealthManager.requestWindowShow(this.window, {
+                source: 'ModelSelectorWindowHelper.showWindow',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.reapplyAfterShow(this.window);
+            this.window.focus();
+        }
+    }
 
-			if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-			this.opacityTimeout = setTimeout(() => {
-				if (this.window && !this.window.isDestroyed()) {
-					this.window.setOpacity(1);
-					this.stealthManager.reapplyAfterShow(this.window);
-					this.window.focus();
-				}
-			}, 60);
-		} else {
-			this.applyStealth(this.contentProtection);
-			this.window.show();
-			this.stealthManager.reapplyAfterShow(this.window);
-			this.window.focus();
-		}
-	}
+    public hideWindow(): void {
+        if (this.window && !this.window.isDestroyed()) {
+            this.window.setParentWindow(null);
+            this.stealthManager.requestWindowHide(this.window, {
+                source: 'ModelSelectorWindowHelper.hideWindow',
+                windowRole: 'auxiliary',
+            })
 
 	public hideWindow(): void {
 		if (this.window && !this.window.isDestroyed()) {
@@ -134,9 +150,29 @@ export class ModelSelectorWindowHelper {
 		}
 	}
 
-	public closeWindow(): void {
-		this.hideWindow();
-	}
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+  const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 140,
+    height: 200,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      backgroundThrottling: false
+    }
+  }
 
 	private createWindow(
 		x?: number,
@@ -163,10 +199,25 @@ export class ModelSelectorWindowHelper {
 			},
 		};
 
-		if (x !== undefined && y !== undefined) {
-			windowSettings.x = Math.round(x);
-			windowSettings.y = Math.round(y);
-		}
+        this.window = new BrowserWindow(windowSettings)
+        // S-RACE-1: apply Layer-0 capture protection synchronously before any
+        // loadURL / setHiddenInMissionControl call so the window is born
+        // protected.
+        this.stealthManager.applyInitialStealth(this.window, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        })
+        this.stealthManager.recordProtectionEvent('window-created', {
+            source: 'ModelSelectorWindowHelper.createWindow',
+            windowRole: 'auxiliary',
+            visible: false,
+        })
+        this.detachRendererBridgeMonitor?.()
+        this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Model selector', this.window, {
+            expectedPreloadPath: preloadPath,
+            url: `${startUrl}?window=model-selector`,
+        })
 
 		this.window = new BrowserWindow(windowSettings);
 
@@ -175,11 +226,8 @@ export class ModelSelectorWindowHelper {
 			this.window.setHiddenInMissionControl(true);
 		}
 
-		// Apply content protection for Undetectable Mode
-		console.log(
-			`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`,
-		);
-		this.applyStealth(this.contentProtection);
+        // Load with query param for routing
+        const url = `${startUrl}?window=model-selector`
 
 		// Load with query param for routing
 		const url = isDev
@@ -190,14 +238,18 @@ export class ModelSelectorWindowHelper {
 			console.error("[ModelSelectorWindowHelper] Failed to load URL:", e);
 		});
 
-		this.window.once("ready-to-show", () => {
-			if (showWhenReady) {
-				this.showWindow(
-					this.window?.getBounds().x || 0,
-					this.window?.getBounds().y || 0,
-				);
-			}
-		});
+        // Close on blur (click outside)
+        this.window.on('blur', () => {
+            if (this.ignoreBlur) return;
+            this.lastBlurTime = Date.now();
+            this.hideWindow();
+        })
+
+        this.window.on('closed', () => {
+            this.detachRendererBridgeMonitor?.();
+            this.detachRendererBridgeMonitor = null;
+        })
+    }
 
 		// Close on blur (click outside)
 		this.window.on("blur", () => {

@@ -69,26 +69,26 @@ class FakeWindow extends EventEmitter {
 }
 
 function createRuntimeHarness(
-	onFault?: (reason: string) => void | Promise<void>,
-	options: { startUrl?: string } = {},
+  onFault: (reason: string) => void | Promise<void>,
+  options: { startUrl?: string } = {},
 ) {
-	const ipcBus = new EventEmitter();
-	const created: FakeWindow[] = [];
-	const runtime = new StealthRuntime({
-		startUrl: options.startUrl ?? "http://localhost:5180?window=launcher",
-		stealthManager: { applyToWindow() {} } as never,
-		createWindow: () => {
-			const win = new FakeWindow(created.length + 1);
-			created.push(win);
-			return win as never;
-		},
-		shellHtmlPath: "/tmp/shell.html",
-		preloadPath: "/tmp/preload.js",
-		shellPreloadPath: "/tmp/shellPreload.js",
-		ipcMain: ipcBus as never,
-		logger: { log() {}, warn() {} },
-		onFault,
-	});
+  const ipcBus = new EventEmitter();
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: options.startUrl ?? 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: () => {
+      const win = new FakeWindow(created.length + 1);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: ipcBus as never,
+    logger: { log() {}, warn() {}, error() {} },
+    onFault,
+  });
 
 	runtime.createPrimaryStealthSurface({
 		width: 100,
@@ -103,15 +103,18 @@ function createRuntimeHarness(
 	};
 }
 
-test("active renderer lifecycle: start/stop and shell readiness remain deterministic", () => {
-	const { runtime, created, ipcBus } = createRuntimeHarness();
+test('active renderer lifecycle: start/stop and shell readiness remain deterministic', () => {
+  const { runtime, created, ipcBus } = createRuntimeHarness(() => {});
 
-	runtime.show();
-	runtime.hide();
-	ipcBus.emit("stealth-shell:ready", {
-		sender: { id: created[1]?.webContents.id },
-	});
-	runtime.destroy();
+  runtime.show();
+  // Simulate first paint frame so the deferred show actually reveals the shell
+  created[0]?.webContents.emit('paint', {}, { x: 0, y: 0, width: 1, height: 1 }, {
+    getSize: () => ({ width: 1, height: 1 }),
+    toPNG: () => Buffer.from([]),
+  });
+  runtime.hide();
+  ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
+  runtime.destroy();
 
 	assert.equal(created.length, 2);
 	assert.equal(created[1]?.shown, true);
@@ -160,12 +163,12 @@ test("active renderer lifecycle: content crash triggers fail-closed supervisor f
 	assert.deepEqual(faults, ["content-window-crashed"]);
 });
 
-test("active renderer lifecycle: rapid shell restarts keep teardown deterministic", () => {
-	const first = createRuntimeHarness();
-	first.runtime.destroy();
+test('active renderer lifecycle: rapid shell restarts keep teardown deterministic', () => {
+  const first = createRuntimeHarness(() => {});
+  first.runtime.destroy();
 
-	const second = createRuntimeHarness();
-	second.runtime.destroy();
+  const second = createRuntimeHarness(() => {});
+  second.runtime.destroy();
 
 	assert.equal(first.created[0]?.destroyed, true);
 	assert.equal(first.created[1]?.destroyed, true);

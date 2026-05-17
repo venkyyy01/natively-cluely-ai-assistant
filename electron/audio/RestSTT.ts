@@ -139,6 +139,7 @@ const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
 // 16kHz * 2 bytes/sample * 1 channel * 0.125 seconds = 4000 bytes
 // Lowered from 16000 to allow short command utterances ("Yes", "Stop") to flush instantly.
 const MIN_BUFFER_BYTES = 4000;
+const OUTPUT_CHANNELS = 1;
 
 // Safety-net upload interval (ms). Primary flush is triggered by speech_ended events.
 // This fires as a backstop if someone talks continuously for >10s without any pause,
@@ -321,11 +322,10 @@ export class RestSTT extends EventEmitter {
 			}, SAFETY_NET_INTERVAL_MS);
 		}
 
-		// Grab current buffer and reset
-		const currentChunks = this.chunks;
-		this.chunks = [];
-		const currentBytes = this.totalBufferedBytes;
-		this.totalBufferedBytes = 0;
+        // Grab current buffer and reset
+        const currentChunks = this.chunks;
+        this.chunks = [];
+        this.totalBufferedBytes = 0;
 
 		// Concatenate all chunks
 		const rawPcm = Buffer.concat(currentChunks);
@@ -451,33 +451,30 @@ export class RestSTT extends EventEmitter {
 		return rms < SILENCE_RMS_THRESHOLD;
 	}
 
-	/**
-	 * Add a WAV RIFF header to raw PCM data
-	 * Critical: Most REST STT APIs require a valid WAV file, NOT raw PCM
-	 */
-	private addWavHeader(samples: Buffer, sampleRate: number = 16000): Buffer {
-		const buffer = Buffer.alloc(44 + samples.length);
-		// RIFF chunk descriptor
-		buffer.write("RIFF", 0);
-		buffer.writeUInt32LE(36 + samples.length, 4);
-		buffer.write("WAVE", 8);
-		// fmt sub-chunk
-		buffer.write("fmt ", 12);
-		buffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
-		buffer.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
-		buffer.writeUInt16LE(this.numChannels, 22); // NumChannels
-		buffer.writeUInt32LE(sampleRate, 24); // SampleRate
-		buffer.writeUInt32LE(
-			sampleRate * this.numChannels * (this.bitsPerSample / 8),
-			28,
-		); // ByteRate
-		buffer.writeUInt16LE(this.numChannels * (this.bitsPerSample / 8), 32); // BlockAlign
-		buffer.writeUInt16LE(this.bitsPerSample, 34); // BitsPerSample
-		// data sub-chunk
-		buffer.write("data", 36);
-		buffer.writeUInt32LE(samples.length, 40);
-		// Copy raw PCM data
-		samples.copy(buffer, 44);
+    /**
+     * Add a WAV RIFF header to raw PCM data
+     * Critical: Most REST STT APIs require a valid WAV file, NOT raw PCM
+     */
+    private addWavHeader(samples: Buffer, sampleRate: number = 16000): Buffer {
+        const buffer = Buffer.alloc(44 + samples.length);
+        // RIFF chunk descriptor
+        buffer.write('RIFF', 0);
+        buffer.writeUInt32LE(36 + samples.length, 4);
+        buffer.write('WAVE', 8);
+        // fmt sub-chunk
+        buffer.write('fmt ', 12);
+        buffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+        buffer.writeUInt16LE(1, 20);  // AudioFormat (1 = PCM)
+        buffer.writeUInt16LE(OUTPUT_CHANNELS, 22);  // NumChannels
+        buffer.writeUInt32LE(sampleRate, 24); // SampleRate
+        buffer.writeUInt32LE(sampleRate * OUTPUT_CHANNELS * (this.bitsPerSample / 8), 28); // ByteRate
+        buffer.writeUInt16LE(OUTPUT_CHANNELS * (this.bitsPerSample / 8), 32); // BlockAlign
+        buffer.writeUInt16LE(this.bitsPerSample, 34); // BitsPerSample
+        // data sub-chunk
+        buffer.write('data', 36);
+        buffer.writeUInt32LE(samples.length, 40);
+        // Copy raw PCM data
+        samples.copy(buffer, 44);
 
 		return buffer;
 	}

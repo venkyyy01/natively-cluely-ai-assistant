@@ -267,23 +267,21 @@ export class PredictivePrefetcher {
 
 			admittedPredictions.push(prediction);
 
-			try {
-				const context = await this.assembleContext(prediction.query);
-				const semanticEmbedding =
-					prediction.embedding.length > 0 ? prediction.embedding : undefined;
-				await this.prefetchCache.set(
-					prediction.query,
-					{
-						context,
-						embedding: prediction.embedding,
-						confidence: prediction.confidence,
-					},
-					semanticEmbedding,
-				);
-			} catch (error) {
-				console.warn("[PredictivePrefetcher] Failed to prefetch:", error);
-			}
-		}
+      try {
+        const context = await this.assembleContext(prediction.query);
+        const semanticEmbedding = prediction.embedding.length > 0 ? prediction.embedding : undefined;
+        // NAT-003 / audit A-3: bind the cache key to the current transcript
+        // revision so a semantic match cannot return another revision's
+        // prefetched context. The matching key prefix is used by getContext().
+        await this.prefetchCache.set(this.bindKey(prediction.query), {
+          context,
+          embedding: prediction.embedding,
+          confidence: prediction.confidence,
+        }, semanticEmbedding);
+      } catch (error) {
+        console.warn('[PredictivePrefetcher] Failed to prefetch:', error);
+      }
+    }
 
 		this.predictions = admittedPredictions;
 	}
@@ -402,22 +400,20 @@ export class PredictivePrefetcher {
 		}
 	}
 
-	async getContext(
-		query: string,
-		embedding?: number[],
-	): Promise<{
-		relevantContext: Array<{
-			role: "interviewer" | "user" | "assistant";
-			text: string;
-			timestamp: number;
-		}>;
-		phase: InterviewPhase;
-	} | null> {
-		const computedEmbedding =
-			embedding ?? (await this.getSemanticEmbedding(query));
-		const effectiveEmbedding =
-			computedEmbedding.length > 0 ? computedEmbedding : undefined;
-		const cached = await this.prefetchCache.get(query, effectiveEmbedding);
+  async getContext(query: string, embedding?: number[]): Promise<{
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
+    phase: InterviewPhase;
+  } | null> {
+    const computedEmbedding = embedding ?? await this.getSemanticEmbedding(query);
+    const effectiveEmbedding = computedEmbedding.length > 0 ? computedEmbedding : undefined;
+    // NAT-003 / audit A-3: lookups are partitioned by transcript revision so
+    // we never return a prefetch from a stale revision (or a different query
+    // that happens to embed close).
+    const cached = await this.prefetchCache.get(
+      this.bindKey(query),
+      effectiveEmbedding,
+      this.bindKeyPrefix(),
+    );
 
 		if (cached) {
 			return cached.context;
@@ -426,10 +422,18 @@ export class PredictivePrefetcher {
 		return null;
 	}
 
-	private trimBm25Cache(): void {
-		while (this.bm25Cache.size > this.MAX_BM25_CACHE_SIZE) {
-			const oldestKey = this.bm25Cache.keys().next().value;
-			if (oldestKey) this.bm25Cache.delete(oldestKey);
-		}
-	}
+  private bindKeyPrefix(): string {
+    return `prefetch:${this.transcriptRevision}:`;
+  }
+
+  private bindKey(query: string): string {
+    return `${this.bindKeyPrefix()}${query.trim().toLowerCase()}`;
+  }
+
+  private trimBm25Cache(): void {
+    while (this.bm25Cache.size > this.MAX_BM25_CACHE_SIZE) {
+      const oldestKey = this.bm25Cache.keys().next().value;
+      if (oldestKey) this.bm25Cache.delete(oldestKey);
+    }
+  }
 }

@@ -71,11 +71,33 @@ test("selected OpenAI model ids pass through unchanged to the outbound request",
 	helper.scrubKeys();
 });
 
-test("OpenAI model-not-found errors fall back to a safe discovered model", async () => {
-	const LLMHelper = await loadLLMHelper();
-	const helper = new LLMHelper() as any;
-	const seenModels: string[] = [];
-	const fallbackEvents: any[] = [];
+test('selected Claude model ids pass through unchanged to the outbound request', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  let seenModel = '';
+
+  helper.setModel('claude-opus-5-2', []);
+  helper.claudeClient = {
+    messages: {
+      create: async (payload: any) => {
+        seenModel = payload.model;
+        return { content: [{ type: 'text', text: 'ok' }] };
+      },
+    },
+  };
+
+  const result = await helper.chatWithGemini('hello claude model');
+
+  assert.equal(result, 'ok');
+  assert.equal(seenModel, 'claude-opus-5-2');
+  helper.scrubKeys();
+});
+
+test('OpenAI model-not-found errors fall back to a safe discovered model', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const seenModels: string[] = [];
+  const fallbackEvents: any[] = [];
 
 	helper.setModel("gpt-5.4-nano", []);
 	helper.resolveOpenAiFallbackModel = async () => "gpt-5.4-mini";

@@ -16,10 +16,11 @@
  *   - Up to 8000-token structured context for domain-specific terms
  */
 
-import { EventEmitter } from "events";
-import WebSocket from "ws";
-import { RECOGNITION_LANGUAGES } from "../config/languages";
-import { resampleToMonoPcm16 } from "./pcm";
+import { EventEmitter } from 'events';
+import WebSocket from 'ws';
+import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { resampleToMonoPcm16 } from './pcm';
+import { DropFrameMetric } from './dropMetrics';
 
 const SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket";
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -41,8 +42,13 @@ export class SonioxStreamingSTT extends EventEmitter {
 	private reconnectTimer: NodeJS.Timeout | null = null;
 	private keepAliveTimer: NodeJS.Timeout | null = null;
 
-	// Accumulated final tokens for building transcript text
-	private pendingFinalText = "";
+    // Accumulated final tokens for building transcript text
+    private pendingFinalText = '';
+    
+    private buffer: Buffer[] = [];
+    // NAT-021: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'soniox' });
+    private isConnecting = false;
 
 	private buffer: Buffer[] = [];
 	private isConnecting = false;
@@ -99,9 +105,14 @@ export class SonioxStreamingSTT extends EventEmitter {
 	 */
 	public setKeywords(_keywords: string[]): void {}
 
-	// =========================================================================
-	// Lifecycle
-	// =========================================================================
+    public start(): void {
+        if (this.isActive) return;
+        this.isActive = true;
+        this.shouldReconnect = true;
+        this.reconnectAttempts = 0;
+        this.dropMetric.start(); // NAT-021
+        this.connect();
+    }
 
 	public start(): void {
 		if (this.isActive) return;
@@ -115,18 +126,14 @@ export class SonioxStreamingSTT extends EventEmitter {
 		this.shouldReconnect = false;
 		this.clearTimers();
 
-		if (this.ws) {
-			try {
-				// Send empty string to signal end-of-audio
-				if (this.ws.readyState === WebSocket.OPEN) {
-					this.ws.send("");
-				}
-			} catch {
-				// Ignore send errors during shutdown
-			}
-			this.ws.close();
-			this.ws = null;
-		}
+        this.isActive = false;
+        this.isConnecting = false;
+        this.configSent = false;
+        this.pendingFinalText = '';
+        this.buffer = [];
+        this.dropMetric.stop(); // NAT-021
+        console.log('[SonioxStreaming] Stopped');
+    }
 
 		this.isActive = false;
 		this.isConnecting = false;
@@ -145,8 +152,12 @@ export class SonioxStreamingSTT extends EventEmitter {
 	// Audio Data
 	// =========================================================================
 
-	public write(chunk: Buffer): void {
-		if (!this.isActive) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.configSent) {
+            this.buffer.push(chunk);
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
 
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.configSent) {
 			this.buffer.push(chunk);
@@ -189,13 +200,17 @@ export class SonioxStreamingSTT extends EventEmitter {
 	// WebSocket Connection
 	// =========================================================================
 
-	private connect(): void {
-		if (this.isConnecting) return;
-		this.isConnecting = true;
+        this.configSent = false;
+        this.pendingFinalText = '';
+        const socket = new WebSocket(SONIOX_WEBSOCKET_URL);
+        this.ws = socket;
 
-		console.log(
-			`[SonioxStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`,
-		);
+        socket.on('open', () => {
+            if (this.ws !== socket) return;
+
+            this.isActive = true;
+            this.reconnectAttempts = 0;
+            console.log('[SonioxStreaming] Connected, sending config...');
 
 		this.configSent = false;
 		this.pendingFinalText = "";
@@ -206,26 +221,36 @@ export class SonioxStreamingSTT extends EventEmitter {
 			this.reconnectAttempts = 0;
 			console.log("[SonioxStreaming] Connected, sending config...");
 
-			// Send initial configuration as first message
-			const config: any = {
-				api_key: this.apiKey,
-				model: "stt-rt-v4",
-				audio_format: "pcm_s16le",
-				sample_rate: this.targetSampleRate,
-				num_channels: 1,
-				enable_language_identification: true,
-				enable_endpoint_detection: true,
-			};
+            try {
+                socket.send(JSON.stringify(config));
+                this.configSent = true;
+                this.isConnecting = false;
+                console.log('[SonioxStreaming] Config sent');
+                
+                // Flush buffer after config is sent
+                while (this.buffer.length > 0) {
+                    const chunk = this.buffer.shift();
+                    if (chunk && this.ws === socket && socket.readyState === WebSocket.OPEN) {
+                        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+                        if (pcm16.length > 0) {
+                            socket.send(pcm16);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('[SonioxStreaming] Failed to send config:', err);
+                this.isConnecting = false;
+            }
 
 			if (this.languageCode) {
 				config.language_hints = [this.languageCode];
 			}
 
-			try {
-				this.ws!.send(JSON.stringify(config));
-				this.configSent = true;
-				this.isConnecting = false;
-				console.log("[SonioxStreaming] Config sent");
+        socket.on('message', (data: WebSocket.Data) => {
+            if (this.ws !== socket) return;
+
+            try {
+                const msg = JSON.parse(data.toString());
 
 				// Flush buffer after config is sent
 				while (this.buffer.length > 0) {
@@ -291,30 +316,39 @@ export class SonioxStreamingSTT extends EventEmitter {
 						continue;
 					}
 
-					if (token.is_final) {
-						currentFinalText += token.text;
-					} else {
-						nonFinalText += token.text;
-					}
-				}
+                // Session finished
+                if (msg.finished) {
+                    console.log('[SonioxStreaming] Session finished');
+                    // We don't stop entirely, just clear WS so it can lazily reconnect on next audio
+                    if (this.ws === socket) {
+                        socket.close();
+                        this.ws = null;
+                        this.configSent = false;
+                        this.isConnecting = false;
+                        this.clearKeepAlive();
+                    }
+                }
+            } catch (err) {
+                console.error('[SonioxStreaming] Parse error:', err);
+            }
+        });
 
-				// 1. Emit final tokens immediately
-				if (currentFinalText) {
-					this.emit("transcript", {
-						text: currentFinalText,
-						isFinal: true,
-						confidence: 1.0,
-					});
-				}
+        socket.on('error', (err: Error) => {
+            if (this.ws !== socket) return;
 
-				// 2. Emit non-final tokens as interim (live preview)
-				if (nonFinalText) {
-					this.emit("transcript", {
-						text: nonFinalText,
-						isFinal: false,
-						confidence: 1.0,
-					});
-				}
+            console.error('[SonioxStreaming] WebSocket error:', err.message);
+            this.emit('error', err);
+        });
+
+        socket.on('close', (code: number, reason: Buffer) => {
+            if (this.ws !== socket) return;
+
+            // Null out the ws reference immediately to prevent stale reuse
+            this.ws = null;
+            this.isConnecting = false;
+            this.configSent = false;
+            this.clearKeepAlive();
+            console.log(`[SonioxStreaming] Closed (code=${code}, reason=${reason.toString()})`);
 
 				// Session finished
 				if (msg.finished) {

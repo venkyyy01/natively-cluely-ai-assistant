@@ -6,8 +6,8 @@ export interface StreamChunk {
 }
 
 export interface StreamConfig {
-	consciousMode?: boolean;
-	onBackgroundTask?: () => Promise<void>;
+  consciousMode?: boolean;
+  onBackgroundTask?: (abortSignal: AbortSignal) => Promise<void>;
 }
 
 interface StreamConfigCallbacks {
@@ -19,6 +19,12 @@ interface StreamConfigCallbacks {
 
 interface PartialJsonParser {
 	tryParse: (text: string) => unknown | null;
+}
+
+interface BackgroundTaskInfo {
+  task: Promise<void>;
+  controller: AbortController;
+  id: number;
 }
 
 class DefaultPartialJsonParser implements PartialJsonParser {
@@ -50,14 +56,18 @@ class DefaultPartialJsonParser implements PartialJsonParser {
 }
 
 export class StreamManager {
-	private jsonAccumulator: string = "";
-	private pendingBuffer: string = "";
-	private partialParser: PartialJsonParser = new DefaultPartialJsonParser();
-	private callbacks: StreamConfigCallbacks;
-	private backgroundTasks: Promise<void>[] = [];
-	private activeTasksCount: number = 0;
-	private readonly maxConcurrency = 3;
-	private readonly maxAccumulatorLength = 500000; // ~500kb limit
+  private jsonAccumulator: string = '';
+  private pendingBuffer: string = '';
+  private partialParser: PartialJsonParser = new DefaultPartialJsonParser();
+  private callbacks: StreamConfigCallbacks;
+  
+  // HIGH RELIABILITY FIX: Proper background task management with AbortController
+  private backgroundTasks: Map<number, BackgroundTaskInfo> = new Map();
+  private nextTaskId: number = 0;
+  private activeTasksCount: number = 0;
+  private readonly maxConcurrency = 3;
+  private readonly maxAccumulatorLength = 500000; // ~500kb limit
+  private streamAbortController: AbortController | null = null;
 
 	constructor(callbacks: StreamConfigCallbacks) {
 		this.callbacks = callbacks;
@@ -72,14 +82,24 @@ export class StreamManager {
 			return;
 		}
 
-		this.jsonAccumulator = "";
-		this.pendingBuffer = "";
-		this.backgroundTasks = [];
-		this.activeTasksCount = 0;
-
-		try {
-			for await (const chunk of stream) {
-				this.pendingBuffer += chunk.text;
+    // HIGH RELIABILITY FIX: Initialize stream-level abort controller
+    this.streamAbortController = new AbortController();
+    this.jsonAccumulator = '';
+    this.pendingBuffer = '';
+    this.activeTasksCount = 0;
+    
+    try {
+      for await (const chunk of stream) {
+        // Check if processing has been aborted
+        if (this.streamAbortController.signal.aborted) {
+          throw new Error("Stream processing aborted");
+        }
+        
+        this.pendingBuffer += chunk.text;
+        
+        if (this.jsonAccumulator.length < this.maxAccumulatorLength) {
+          this.jsonAccumulator += chunk.text;
+        }
 
 				if (this.jsonAccumulator.length < this.maxAccumulatorLength) {
 					this.jsonAccumulator += chunk.text;
@@ -89,10 +109,13 @@ export class StreamManager {
 					this.callbacks.onToken(this.pendingBuffer);
 					this.pendingBuffer = "";
 
-					if (config.consciousMode) {
-						const partial = this.partialParser.tryParse(this.jsonAccumulator);
-						if (partial) {
-							this.callbacks.onPartialJson(partial);
+              if (config.onBackgroundTask && this.activeTasksCount < this.maxConcurrency) {
+                this.startBackgroundTask(config.onBackgroundTask);
+              }
+            }
+          }
+        }
+      }
 
 							if (
 								config.onBackgroundTask &&
@@ -111,34 +134,101 @@ export class StreamManager {
 				}
 			}
 
-			if (this.pendingBuffer.length > 0) {
-				this.callbacks.onToken(this.pendingBuffer);
-				this.pendingBuffer = "";
-			}
+      // HIGH RELIABILITY FIX: Properly wait for background tasks to complete or timeout
+      if (this.backgroundTasks.size > 0) {
+        await this.waitForBackgroundTasks();
+      }
 
 			if (this.backgroundTasks.length > 0) {
 				await Promise.allSettled(this.backgroundTasks);
 			}
 
-			if (config.consciousMode && this.jsonAccumulator) {
-				try {
-					const full = JSON.parse(this.jsonAccumulator);
-					this.callbacks.onComplete(full);
-				} catch {
-					this.callbacks.onComplete({ raw: this.jsonAccumulator });
-				}
-			}
-		} catch (error) {
-			this.backgroundTasks = [];
-			this.callbacks.onError(
-				error instanceof Error ? error : new Error(String(error)),
-			);
-		}
-	}
+    } catch (error) {
+      // HIGH RELIABILITY FIX: Properly cancel all background tasks on error
+      this.cancelAllBackgroundTasks("Stream processing failed");
+      this.callbacks.onError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      // HIGH RELIABILITY FIX: Clean up resources
+      this.cleanup();
+    }
+  }
 
-	private isSemanticBoundary(text: string): boolean {
-		return /[.?!]\s*$|\n$/.test(text);
-	}
+  /**
+   * HIGH RELIABILITY FIX: Start a background task with proper abort controller
+   */
+  private startBackgroundTask(taskFn: (abortSignal: AbortSignal) => Promise<void>): void {
+    const taskId = this.nextTaskId++;
+    const controller = new AbortController();
+    
+    this.activeTasksCount++;
+    
+    const task = taskFn(controller.signal)
+      .catch((error) => {
+        // Don't log abort errors as they're intentional
+        if (error.name !== 'AbortError') {
+          console.error(`[StreamManager] Background task ${taskId} failed:`, error);
+        }
+      })
+      .finally(() => {
+        this.activeTasksCount--;
+        this.backgroundTasks.delete(taskId);
+      });
+    
+    this.backgroundTasks.set(taskId, { task, controller, id: taskId });
+  }
+
+  /**
+   * HIGH RELIABILITY FIX: Wait for all background tasks with timeout
+   */
+  private async waitForBackgroundTasks(timeoutMs: number = 10000): Promise<void> {
+    const taskPromises = Array.from(this.backgroundTasks.values()).map(({ task }) => task);
+    
+    if (taskPromises.length === 0) return;
+
+    try {
+      // Wait for all tasks or timeout
+      await Promise.race([
+        Promise.allSettled(taskPromises),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Background tasks timeout')), timeoutMs)
+        )
+      ]);
+    } catch (error) {
+      console.warn('[StreamManager] Background tasks timed out, cancelling remaining tasks');
+      this.cancelAllBackgroundTasks("Background tasks timeout");
+    }
+  }
+
+  /**
+   * HIGH RELIABILITY FIX: Cancel all background tasks with proper cleanup
+   */
+  private cancelAllBackgroundTasks(reason: string): void {
+    const tasks = Array.from(this.backgroundTasks.entries());
+    for (const [taskId, { controller }] of tasks) {
+      try {
+        controller.abort(new Error(reason));
+      } catch (error) {
+        console.warn(`[StreamManager] Failed to abort background task ${taskId}:`, error);
+      }
+    }
+    this.backgroundTasks.clear();
+    this.activeTasksCount = 0;
+  }
+
+  /**
+   * HIGH RELIABILITY FIX: Comprehensive cleanup of resources
+   */
+  private cleanup(): void {
+    if (this.streamAbortController) {
+      this.streamAbortController.abort();
+      this.streamAbortController = null;
+    }
+    this.cancelAllBackgroundTasks("Stream processing completed");
+  }
+
+  private isSemanticBoundary(text: string): boolean {
+    return /[.?!]\s*$|\n$/.test(text);
+  }
 
 	private async processStreamLegacy(
 		stream: AsyncIterable<StreamChunk>,
@@ -165,9 +255,23 @@ export class StreamManager {
 		}
 	}
 
-	reset(): void {
-		this.jsonAccumulator = "";
-		this.pendingBuffer = "";
-		this.backgroundTasks = [];
-	}
+  /**
+   * HIGH RELIABILITY FIX: Enhanced reset with proper cleanup
+   */
+  reset(): void {
+    this.jsonAccumulator = '';
+    this.pendingBuffer = '';
+    this.cancelAllBackgroundTasks("StreamManager reset");
+  }
+
+  /**
+   * HIGH RELIABILITY FIX: Graceful shutdown method
+   */
+  async shutdown(timeoutMs: number = 5000): Promise<void> {
+    try {
+      await this.waitForBackgroundTasks(timeoutMs);
+    } finally {
+      this.cleanup();
+    }
+  }
 }

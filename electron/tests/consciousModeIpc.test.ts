@@ -146,9 +146,11 @@ async function loadPreloadModule() {
 		return originalLoad.call(this, request, parent, isMain);
 	};
 
-	const preloadModulePath = require.resolve("../preload");
-	delete require.cache[preloadModulePath];
-	await import("../preload");
+  const preloadModulePath = require.resolve('../preload');
+  const preloadApiModulePath = require.resolve('../preload/api');
+  delete require.cache[preloadModulePath];
+  delete require.cache[preloadApiModulePath];
+  await import('../preload');
 
 	return {
 		exposedApi,

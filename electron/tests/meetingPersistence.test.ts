@@ -287,12 +287,60 @@ test("MeetingPersistence skips placeholder and background saves for meetings sho
 	}
 });
 
-test("MeetingPersistence waits for pending saves and tolerates timeout expiry", async () => {
-	const persistence = new MeetingPersistence({} as never, {} as never);
-	const pendingSaves = (
-		persistence as unknown as { pendingSaves: Set<Promise<void>> }
-	).pendingSaves;
-	pendingSaves.add(new Promise<void>(() => {}));
+test('NAT-022: MeetingPersistence disposes the old session after handoff', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const successorSession = { id: 'next-session' };
+  let disposed = false;
+
+  DatabaseManager.getInstance = ((() => ({
+    createOrUpdateMeetingProcessingRecord() {},
+    finalizeMeetingProcessing() {},
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      {
+        flushInterimTranscript() {},
+        async flushPersistenceNow() {},
+        createSnapshot(): MeetingSnapshot {
+          return {
+            transcript: [{ speaker: 'interviewer', text: 'hello', timestamp: 1, final: true }],
+            usage: [],
+            startTime: 1,
+            durationMs: 999,
+            context: '[INTERVIEWER]: hello',
+            meetingMetadata: null,
+          };
+        },
+        createSuccessorSession() {
+          return successorSession;
+        },
+        async dispose() {
+          disposed = true;
+        },
+      } as never,
+      {
+        generateMeetingSummary: async () => 'unused',
+      } as never,
+    );
+
+    const returned = await persistence.stopMeeting('meeting-dispose');
+    assert.equal(returned, successorSession);
+    assert.equal(disposed, true);
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence waits for pending saves and tolerates timeout expiry', async () => {
+  const persistence = new MeetingPersistence({} as never, {} as never);
+  const pendingSaves = (persistence as unknown as { pendingSaves: Set<Promise<void>> }).pendingSaves;
+  pendingSaves.add(new Promise<void>(() => {}));
 
 	await assert.doesNotReject(async () => {
 		await persistence.waitForPendingSaves(1);
@@ -371,19 +419,20 @@ test("MeetingPersistence reuses meaningful metadata titles and skips summary gen
 	}
 });
 
-test("MeetingPersistence marks failed finalization attempts and notifies listeners", async () => {
-	const originalGetInstance = DatabaseManager.getInstance;
-	const notifications: string[] = [];
-	const restoreElectron = installElectronMock([
-		{
-			webContents: {
-				send(channel: string) {
-					notifications.push(channel);
-				},
-			},
-		},
-	]);
-	const failed: Array<{ id: string; message: string }> = [];
+test('MeetingPersistence marks failed finalization attempts and notifies listeners', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const notifications: string[] = [];
+  const restoreElectron = installElectronMock([
+    {
+      isDestroyed: () => false,
+      webContents: {
+        send(channel: string) {
+          notifications.push(channel);
+        },
+      },
+    },
+  ]);
+  const failed: Array<{ id: string; message: string }> = [];
 
 	DatabaseManager.getInstance = (() => ({
 		finalizeMeetingProcessing() {

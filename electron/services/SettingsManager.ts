@@ -3,17 +3,23 @@ import fs from "fs";
 import path from "path";
 
 export interface AppSettings {
-	// Only boot-critical or non-encrypted settings should live here.
-	// In the future, other non-secret data like 'language' or 'theme'
-	// can be moved here from CredentialsManager to allow early boot access.
-	isUndetectable?: boolean;
-	disguiseMode?: "terminal" | "settings" | "activity" | "none";
-	consciousModeEnabled?: boolean;
-	accelerationModeEnabled?: boolean;
-	enablePrivateMacosStealthApi?: boolean;
-	enableCaptureDetectionWatchdog?: boolean;
-	enableVirtualDisplayIsolation?: boolean;
-	captureToolPatterns?: string[];
+// Only boot-critical or non-encrypted settings should live here.
+// In the future, other non-secret data like 'language' or 'theme'
+// can be moved here from CredentialsManager to allow early boot access.
+isUndetectable?: boolean;
+disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
+consciousModeEnabled?: boolean;
+accelerationModeEnabled?: boolean;
+enablePrivateMacosStealthApi?: boolean;
+enableCaptureDetectionWatchdog?: boolean;
+enableVirtualDisplayIsolation?: boolean;
+captureToolPatterns?: string[];
+// Cursor stealth: when true, the OS hardware cursor is frozen at the
+// overlay boundary by a low-level cursor hook (CGEventTap on macOS,
+// WH_MOUSE_LL on Windows) and the renderer paints a software cursor
+// inside the capture-excluded overlay window. Off by default — first
+// activation triggers the OS Accessibility prompt on macOS.
+cursorHookEnabled?: boolean;
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings["disguiseMode"]>([
@@ -56,15 +62,16 @@ function sanitizeSettings(candidate: unknown): AppSettings {
 		sanitized.enableVirtualDisplayIsolation = raw.enableVirtualDisplayIsolation;
 	}
 
-	if (Array.isArray(raw.captureToolPatterns)) {
-		const patterns = raw.captureToolPatterns.filter(
-			(value): value is string =>
-				typeof value === "string" && value.trim().length > 0,
-		);
-		if (patterns.length > 0) {
-			sanitized.captureToolPatterns = patterns;
-		}
-	}
+  if (typeof raw.cursorHookEnabled === 'boolean') {
+    sanitized.cursorHookEnabled = raw.cursorHookEnabled;
+  }
+
+  if (Array.isArray(raw.captureToolPatterns)) {
+    const patterns = raw.captureToolPatterns.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (patterns.length > 0) {
+      sanitized.captureToolPatterns = patterns;
+    }
+  }
 
 	if (
 		typeof raw.disguiseMode === "string" &&

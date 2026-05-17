@@ -76,23 +76,15 @@ exports.default = async (context) => {
 		return;
 	}
 
-	const appOutDir = context.appOutDir;
-	const appName = context.packager.appInfo.productFilename;
-	const appPath = path.join(appOutDir, `${appName}.app`);
-	const helperPath = path.join(
-		appPath,
-		"Contents",
-		"Resources",
-		"bin",
-		"macos",
-		"stealth-virtual-display-helper",
-	);
-	const fullStealthHelperBundlePath = path.join(
-		appPath,
-		"Contents",
-		"XPCServices",
-		"macos-full-stealth-helper.xpc",
-	);
+    const appOutDir = context.appOutDir;
+    const appName = context.packager.appInfo.productFilename;
+    const appPath = path.join(appOutDir, `${appName}.app`);
+    const helperPath = [
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'system-services-helper'),
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper'),
+    ].find((candidate) => fs.existsSync(candidate));
+    const foundationIntentHelperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'foundation-intent-helper');
+    const fullStealthHelperBundlePath = path.join(appPath, 'Contents', 'XPCServices', 'macos-full-stealth-helper.xpc');
 
 	// ── Step 1: Disguise helper display names (before signing) ──
 	try {
@@ -113,13 +105,11 @@ exports.default = async (context) => {
 		`[Ad-Hoc Signing] Signing ${appPath} with entitlements from ${entitlementsPath}...`,
 	);
 
-	try {
-		if (fs.existsSync(helperPath)) {
-			console.log(`[Ad-Hoc Signing] Signing helper binary ${helperPath}...`);
-			execSync(`codesign --force --sign - "${helperPath}"`, {
-				stdio: "inherit",
-			});
-		}
+    try {
+        if (helperPath) {
+            console.log(`[Ad-Hoc Signing] Signing helper binary ${helperPath}...`);
+            execSync(`codesign --force --sign - "${helperPath}"`, { stdio: 'inherit' });
+        }
 
 		if (fs.existsSync(fullStealthHelperBundlePath)) {
 			console.log(
@@ -131,19 +121,19 @@ exports.default = async (context) => {
 			);
 		}
 
-		// --force: replace existing signature
-		// --deep: sign nested code
-		// --entitlements: attach JIT/memory entitlements (critical for Apple Silicon)
-		// --sign -: ad-hoc signature
-		execSync(
-			`codesign --force --deep --entitlements "${entitlementsPath}" --sign - "${appPath}"`,
-			{ stdio: "inherit" },
-		);
-		console.log(
-			"[Ad-Hoc Signing] Successfully signed the application with entitlements.",
-		);
-	} catch (error) {
-		console.error("[Ad-Hoc Signing] Failed to sign the application:", error);
-		throw error;
-	}
+        if (fs.existsSync(foundationIntentHelperPath)) {
+            console.log(`[Ad-Hoc Signing] Signing foundation intent helper ${foundationIntentHelperPath}...`);
+            execSync(`codesign --force --entitlements "${entitlementsPath}" --sign - "${foundationIntentHelperPath}"`, { stdio: 'inherit' });
+        }
+
+        // --force: replace existing signature
+        // --deep: sign nested code
+        // --entitlements: attach JIT/memory entitlements (critical for Apple Silicon)
+        // --sign -: ad-hoc signature
+        execSync(`codesign --force --deep --entitlements "${entitlementsPath}" --sign - "${appPath}"`, { stdio: 'inherit' });
+        console.log('[Ad-Hoc Signing] Successfully signed the application with entitlements.');
+    } catch (error) {
+        console.error('[Ad-Hoc Signing] Failed to sign the application:', error);
+        throw error;
+    }
 };

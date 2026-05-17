@@ -1,9 +1,18 @@
-import type { ConsciousModeStructuredResponse } from "../ConsciousMode";
-import type { AnswerHypothesis } from "./AnswerHypothesisStore";
+import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
+import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { SemanticEntailmentVerifier } from './SemanticEntailmentVerifier';
+import { isVerifierOptimizationActive } from '../config/optimizations';
+import { TranscriptIndex, type SearchResult } from './TranscriptIndex';
 
 export interface ConsciousProvenanceVerdict {
-	ok: boolean;
-	reason?: string;
+  ok: boolean;
+  reason?: string;
+  /**
+   * NAT-CM-AUDIT: when verification failed because of unsupported tokens,
+   * these are the tokens the response should drop. Callers can use them
+   * to salvage a relevant answer instead of throwing the whole thing away.
+   */
+  unsupportedTokens?: string[];
 }
 
 const KNOWN_TECH_TERMS = [
@@ -62,26 +71,49 @@ const TECH_CANDIDATE_STOPWORDS = new Set([
 const TECH_NOUN_PATTERN =
 	/(?:database|db|queue|cache|broker|stream|topic|cluster|index|vector|service|api|sdk|framework|library|runtime|warehouse|search|engine|store|model|provider|platform|orchestrator)s?/i;
 
-function summaryText(
-	response: ConsciousModeStructuredResponse,
-	lowercase: boolean = true,
-): string {
-	const text = [
-		response.openingReasoning,
-		...response.implementationPlan,
-		...response.tradeoffs,
-		...response.edgeCases,
-		...response.scaleConsiderations,
-		...response.pushbackResponses,
-		response.behavioralAnswer?.question,
-		response.behavioralAnswer?.headline,
-		response.behavioralAnswer?.situation,
-		response.behavioralAnswer?.task,
-		response.behavioralAnswer?.action,
-		response.behavioralAnswer?.result,
-		...(response.behavioralAnswer?.whyThisAnswerWorks || []),
-		response.codeTransition,
-	].join(" ");
+function summaryText(response: ConsciousModeStructuredResponse, lowercase: boolean = true): string {
+  const coding = response.codingInterviewAnswer;
+  const text = [
+    response.openingReasoning,
+    ...response.implementationPlan,
+    ...response.tradeoffs,
+    ...response.edgeCases,
+    ...response.scaleConsiderations,
+    ...response.pushbackResponses,
+    coding?.language,
+    coding?.problemUnderstanding.task,
+    coding?.problemUnderstanding.inputsOutputsConstraints,
+    ...(coding?.problemUnderstanding.trickyCases || []),
+    ...(coding?.problemUnderstanding.hiddenAssumptions || []),
+    coding?.problemUnderstanding.interviewerEvaluation,
+    coding?.bruteForceApproach.intuition,
+    coding?.bruteForceApproach.whyItWorks,
+    coding?.bruteForceApproach.code,
+    coding?.bruteForceApproach.timeComplexity,
+    coding?.bruteForceApproach.timeComplexityReasoning,
+    coding?.bruteForceApproach.spaceComplexity,
+    coding?.bruteForceApproach.spaceComplexityReasoning,
+    coding?.optimizedApproach.whyBruteForceInsufficient,
+    coding?.optimizedApproach.optimizationInsight,
+    coding?.optimizedApproach.dataStructureChoice,
+    coding?.optimizedApproach.code,
+    coding?.optimizedApproach.timeComplexity,
+    coding?.optimizedApproach.timeComplexityReasoning,
+    coding?.optimizedApproach.spaceComplexity,
+    coding?.optimizedApproach.spaceComplexityReasoning,
+    coding?.tradeoffsAndInterviewReasoning.whyPreferred,
+    ...(coding?.tradeoffsAndInterviewReasoning.alternatives || []),
+    coding?.tradeoffsAndInterviewReasoning.dataStructureRationale,
+    ...(coding?.tradeoffsAndInterviewReasoning.commonFollowUps || []),
+    response.behavioralAnswer?.question,
+    response.behavioralAnswer?.headline,
+    response.behavioralAnswer?.situation,
+    response.behavioralAnswer?.task,
+    response.behavioralAnswer?.action,
+    response.behavioralAnswer?.result,
+    ...(response.behavioralAnswer?.whyThisAnswerWorks || []),
+    response.codeTransition,
+  ].join(' ');
 
 	return lowercase ? text.toLowerCase() : text;
 }
@@ -227,82 +259,131 @@ function extractNumbers(text: string): string[] {
 }
 
 export class ConsciousProvenanceVerifier {
-	private normalizeGroundingContext(input: {
-		semanticContextBlock?: string;
-		evidenceContextBlock?: string;
-		question?: string;
-	}): { strict: string; relaxed: string } {
-		const semanticContext = (input.semanticContextBlock || "")
-			.trim()
-			.toLowerCase();
-		const evidenceContext = (input.evidenceContextBlock || "")
-			.trim()
-			.toLowerCase();
-		const questionContext = (input.question || "").trim().toLowerCase();
+  private semanticEntailmentVerifier = new SemanticEntailmentVerifier();
 
-		const strict = [semanticContext, evidenceContext].filter(Boolean).join(" ");
-		const relaxed = [strict, questionContext].filter(Boolean).join(" ");
+  private normalizeGroundingContext(input: {
+    semanticContextBlock?: string;
+    evidenceContextBlock?: string;
+  }): { strict: string } {
+    const semanticContext = (input.semanticContextBlock || '').trim().toLowerCase();
+    const evidenceContext = (input.evidenceContextBlock || '').trim().toLowerCase();
 
-		return { strict, relaxed };
-	}
+    // NAT-004 / audit A-9: question text is intentionally NOT included in the
+    // grounding context. Echoing the user's question is not evidence that the
+    // claim is true; using it as grounding lets the model "supply" its own
+    // grounding by parroting the question back.
+    const strict = [semanticContext, evidenceContext].filter(Boolean).join(' ');
 
-	private findUnsupportedTerms(
-		terms: string[],
-		strictContext: string,
-		relaxedContext: string,
-	): string[] {
-		const unsupported: string[] = [];
-		for (const term of terms) {
-			if (strictContext.includes(term) || relaxedContext.includes(term)) {
-				continue;
-			}
-			unsupported.push(term);
-		}
-		return unsupported;
-	}
+    return { strict };
+  }
 
-	verify(input: {
-		response: ConsciousModeStructuredResponse;
-		semanticContextBlock?: string;
-		evidenceContextBlock?: string;
-		question?: string;
-		hypothesis?: AnswerHypothesis | null;
-	}): ConsciousProvenanceVerdict {
-		const grounding = this.normalizeGroundingContext(input);
-		const hasStrictGroundingContext = Boolean(grounding.strict);
+  private async findUnsupportedTerms(terms: string[], strictContext: string): Promise<string[]> {
+    const unsupported: string[] = [];
+    const useSemantic = isVerifierOptimizationActive('useSemanticEntailment');
 
-		if (!hasStrictGroundingContext) {
-			return { ok: true };
-		}
+    for (const term of terms) {
+      // Token-based check (fast path)
+      if (strictContext.includes(term)) {
+        continue;
+      }
 
-		if (!grounding.relaxed.trim()) {
-			return { ok: true };
-		}
+      // Semantic check if flag is enabled
+      if (useSemantic) {
+        try {
+          const isSemanticallySupported = await this.semanticEntailmentVerifier.verifyTermSemantically(term, strictContext);
+          if (isSemanticallySupported) {
+            continue; // Term is semantically supported
+          }
+        } catch (error) {
+          console.warn('[ConsciousProvenanceVerifier] Semantic entailment check failed, falling back to unsupported:', error);
+          // Fall through to mark as unsupported
+        }
+      }
 
-		const responseText = summaryText(input.response);
-		const originalResponseText = summaryText(input.response, false);
-		const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(
-			grounding.strict,
-			grounding.relaxed,
-		);
+      unsupported.push(term);
+    }
+    return unsupported;
+  }
 
-		const unsupportedTech = this.findUnsupportedTerms(
-			extractTechnologyClaims(originalResponseText, dynamicGroundingVocabulary),
-			grounding.strict,
-			grounding.relaxed,
-		);
-		if (unsupportedTech.length > 0) {
-			return { ok: false, reason: "unsupported_technology_claim" };
-		}
+  /**
+   * NAT-004 / audit A-4: a response that names a specific technology or quotes
+   * a metric must be backed by strict grounding. Used to decide whether an
+   * empty-grounding response is "harmless to wave through" or a real fail.
+   */
+  private responseHasTechnologyOrMetricClaim(response: ConsciousModeStructuredResponse): boolean {
+    const lowered = summaryText(response);
+    const original = summaryText(response, false);
 
-		const unsupportedNumbers = this.findUnsupportedTerms(
-			extractNumbers(responseText),
-			grounding.strict,
-			grounding.relaxed,
-		);
-		if (unsupportedNumbers.length > 0) {
-			return { ok: false, reason: "unsupported_metric_claim" };
-		}
+    if (extractTechnologyClaims(original).length > 0) {
+      return true;
+    }
+    if (extractNumbers(lowered).length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  async verify(input: {
+    response: ConsciousModeStructuredResponse;
+    semanticContextBlock?: string;
+    evidenceContextBlock?: string;
+    question?: string;
+    hypothesis?: AnswerHypothesis | null;
+    transcriptIndex?: TranscriptIndex | null;
+  }): Promise<ConsciousProvenanceVerdict> {
+    // Expand grounding context with RAG if flag is enabled
+    let expandedSemanticContext = input.semanticContextBlock || '';
+    const useRAG = isVerifierOptimizationActive('useRAGVerification');
+    if (useRAG && input.transcriptIndex) {
+      const responseText = summaryText(input.response);
+      const ragResults = input.transcriptIndex.search(responseText);
+      if (ragResults.length > 0) {
+        const ragContext = ragResults.map(r => r.segment.text).join(' ');
+        expandedSemanticContext = [expandedSemanticContext, ragContext].filter(Boolean).join(' ');
+        console.log(`[ConsciousProvenanceVerifier] RAG expanded grounding with ${ragResults.length} segments`);
+      }
+    }
+
+    const grounding = this.normalizeGroundingContext({ 
+      semanticContextBlock: expandedSemanticContext,
+      evidenceContextBlock: input.evidenceContextBlock 
+    });
+    const hasStrictGroundingContext = Boolean(grounding.strict);
+
+    if (!hasStrictGroundingContext) {
+      // When no profile/semantic data is loaded, we cannot verify technology
+      // or metric claims. Rather than failing closed (which trips the circuit
+      // breaker and kills conscious mode entirely), pass through with a note
+      // that provenance was unverifiable. The deterministic verifier and LLM
+      // judge still provide quality gates.
+      if (this.responseHasTechnologyOrMetricClaim(input.response)) {
+        console.log('[ConsciousProvenanceVerifier] No grounding context available; passing through technology/metric claims (unverifiable, not rejected)');
+        // NAT-CM-AUDIT: surface unverifiable so callers can tag answer metadata
+        // and the UI can reflect "not grounded" instead of silently passing.
+        return { ok: true, reason: 'unverifiable_no_grounding' };
+      }
+      return { ok: true };
+    }
+
+    const responseText = summaryText(input.response);
+    const originalResponseText = summaryText(input.response, false);
+    const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(grounding.strict);
+
+    const unsupportedTech = await this.findUnsupportedTerms(
+      extractTechnologyClaims(originalResponseText, dynamicGroundingVocabulary),
+      grounding.strict,
+    );
+    if (unsupportedTech.length > 0) {
+      return { ok: false, reason: 'unsupported_technology_claim', unsupportedTokens: unsupportedTech };
+    }
+
+    const unsupportedNumbers = await this.findUnsupportedTerms(
+      extractNumbers(responseText),
+      grounding.strict,
+    );
+    if (unsupportedNumbers.length > 0) {
+      return { ok: false, reason: 'unsupported_metric_claim', unsupportedTokens: unsupportedNumbers };
+    }
 
 		return { ok: true };
 	}

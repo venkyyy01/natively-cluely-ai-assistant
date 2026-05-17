@@ -1,19 +1,25 @@
-export type ConsciousModeResponseMode = "reasoning_first" | "invalid";
+import { InterviewerUtteranceBuffer, type BufferedUtterance } from './buffering/InterviewerUtteranceBuffer';
+import { getOptimizationFlags } from './config/optimizations';
+import { getDefaultTriggerAuditLog, TriggerAuditLog, type TriggerDecisionCohort, type TriggerDecisionReasonCode } from './observability/TriggerAuditLog';
+import { shouldAutoAttachScreenshotsForQuestion } from './coding/screenshotRelevance';
+
+export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
 
 export const CONSCIOUS_MODE_SCHEMA_VERSION = "conscious_mode_v1" as const;
 
 export const CONSCIOUS_MODE_RESPONSE_FIELDS = [
-	"schemaVersion",
-	"mode",
-	"openingReasoning",
-	"implementationPlan",
-	"tradeoffs",
-	"edgeCases",
-	"scaleConsiderations",
-	"pushbackResponses",
-	"likelyFollowUps",
-	"codeTransition",
-	"behavioralAnswer",
+  'schemaVersion',
+  'mode',
+  'openingReasoning',
+  'implementationPlan',
+  'tradeoffs',
+  'edgeCases',
+  'scaleConsiderations',
+  'pushbackResponses',
+  'likelyFollowUps',
+  'codeTransition',
+  'codingInterviewAnswer',
+  'behavioralAnswer',
 ] as const;
 
 export const CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS = `RESPONSE SCHEMA VERSION: ${CONSCIOUS_MODE_SCHEMA_VERSION}
@@ -30,6 +36,41 @@ Return ONLY valid JSON with these canonical keys:
   "pushbackResponses": ["string"],
   "likelyFollowUps": ["string"],
   "codeTransition": "string",
+  "codingInterviewAnswer": {
+    "language": "string",
+    "problemUnderstanding": {
+      "task": "string",
+      "inputsOutputsConstraints": "string",
+      "trickyCases": ["string"],
+      "hiddenAssumptions": ["string"],
+      "interviewerEvaluation": "string"
+    },
+    "bruteForceApproach": {
+      "intuition": "string",
+      "whyItWorks": "string",
+      "code": "string",
+      "timeComplexity": "string",
+      "timeComplexityReasoning": "string",
+      "spaceComplexity": "string",
+      "spaceComplexityReasoning": "string"
+    },
+    "optimizedApproach": {
+      "whyBruteForceInsufficient": "string",
+      "optimizationInsight": "string",
+      "dataStructureChoice": "string",
+      "code": "string",
+      "timeComplexity": "string",
+      "timeComplexityReasoning": "string",
+      "spaceComplexity": "string",
+      "spaceComplexityReasoning": "string"
+    },
+    "tradeoffsAndInterviewReasoning": {
+      "whyPreferred": "string",
+      "alternatives": ["string"],
+      "dataStructureRationale": "string",
+      "commonFollowUps": ["string"]
+    }
+  },
   "behavioralAnswer": {
     "question": "string",
     "headline": "string",
@@ -51,6 +92,15 @@ CRITICAL RULES — MOST FIELDS SHOULD BE EMPTY:
 - pushbackResponses: [] unless they challenged your approach.
 - likelyFollowUps: 0-2 max. What they might ask next, not a list of everything you know.
 - codeTransition: "" unless it's a coding question.
+- codingInterviewAnswer: REQUIRED for a fresh live-coding/coding problem, especially when an image/screenshot is provided. Otherwise set it to null.
+
+FRESH LIVE-CODING / CODE-SCREENSHOT RULES — STRICT:
+- Before code, explicitly explain the task, inputs, outputs, constraints, edge cases, hidden assumptions, and what the interviewer is evaluating.
+- Always include BOTH bruteForceApproach and optimizedApproach with full working code.
+- For BOTH approaches, include time complexity, why that time occurs, space complexity, and why that space occurs.
+- In optimizedApproach, explain why brute force is insufficient, the optimization insight, and why the selected data structure/algorithm fits.
+- In tradeoffsAndInterviewReasoning, explain why the optimized approach is preferred, alternatives, data-structure choices, and common follow-ups.
+- For follow-up questions about an existing solution, do NOT dump the full A/B/C/D structure again unless the interviewer asks for the whole solution.
 
 SPEECH STYLE — TALK LIKE A REAL PERSON:
 - Write like someone actually talking, not writing an essay
@@ -74,25 +124,68 @@ export interface ConsciousBehavioralAnswer {
 	whyThisAnswerWorks: string[];
 }
 
+export interface ConsciousCodingProblemUnderstanding {
+  task: string;
+  inputsOutputsConstraints: string;
+  trickyCases: string[];
+  hiddenAssumptions: string[];
+  interviewerEvaluation: string;
+}
+
+export interface ConsciousCodingApproach {
+  intuition?: string;
+  whyItWorks?: string;
+  whyBruteForceInsufficient?: string;
+  optimizationInsight?: string;
+  dataStructureChoice?: string;
+  code: string;
+  timeComplexity: string;
+  timeComplexityReasoning: string;
+  spaceComplexity: string;
+  spaceComplexityReasoning: string;
+}
+
+export interface ConsciousCodingInterviewReasoning {
+  whyPreferred: string;
+  alternatives: string[];
+  dataStructureRationale: string;
+  commonFollowUps: string[];
+}
+
+export interface ConsciousCodingInterviewAnswer {
+  language: string;
+  problemUnderstanding: ConsciousCodingProblemUnderstanding;
+  bruteForceApproach: ConsciousCodingApproach;
+  optimizedApproach: ConsciousCodingApproach;
+  tradeoffsAndInterviewReasoning: ConsciousCodingInterviewReasoning;
+}
+
 export interface ConsciousModeStructuredResponse {
-	mode: ConsciousModeResponseMode;
-	openingReasoning: string;
-	implementationPlan: string[];
-	tradeoffs: string[];
-	edgeCases: string[];
-	scaleConsiderations: string[];
-	pushbackResponses: string[];
-	likelyFollowUps: string[];
-	codeTransition: string;
-	behavioralAnswer?: ConsciousBehavioralAnswer | null;
+  mode: ConsciousModeResponseMode;
+  openingReasoning: string;
+  implementationPlan: string[];
+  tradeoffs: string[];
+  edgeCases: string[];
+  scaleConsiderations: string[];
+  pushbackResponses: string[];
+  likelyFollowUps: string[];
+  codeTransition: string;
+  codingInterviewAnswer?: ConsciousCodingInterviewAnswer | null;
+  behavioralAnswer?: ConsciousBehavioralAnswer | null;
 }
 
 export interface ReasoningThread {
-	rootQuestion: string;
-	lastQuestion: string;
-	response: ConsciousModeStructuredResponse;
-	followUpCount: number;
-	updatedAt: number;
+  /** When set, matches `ConversationThread.id` from ThreadManager (design view). NAT-055 */
+  threadId?: string;
+  rootQuestion: string;
+  lastQuestion: string;
+  response: ConsciousModeStructuredResponse;
+  followUpCount: number;
+  updatedAt: number;
+  /** Cached embedding for semantic thread continuation compatibility checks */
+  embedding?: number[];
+  /** NAT-202: Two-Tier probe answers. Capped at MAX_PROBES (8), LRU eviction. rootResponse is immutable after Tier-A commit. */
+  probes?: import('./coding/types').ProbeAnswer[];
 }
 
 export type ConsciousModeThreadAction =
@@ -107,33 +200,34 @@ export interface ConsciousModeQuestionRoute {
 }
 
 const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
-	/^tell me about a time\b/i,
-	/^describe a time\b/i,
-	/^describe a situation\b/i,
-	/^share an experience\b/i,
-	/^give me an example\b/i,
-	/^walk me through\b.*\b(time|situation|experience|example|conflict|failure|mistake|decision|disagreement|stakeholder|team challenge|project you led|owned end to end)\b/i,
-	/^talk about\b/i,
-	/^how do you handle\b/i,
-	/^how do you manage\b/i,
-	/^what is your .*style\b/i,
-	/^how do you make .*decision/i,
-	/^how do you influence\b/i,
-	/^how do you prioritize\b/i,
-	/\bleadership\b/i,
-	/\bconflict\b/i,
-	/\bdisagreed\b/i,
-	/\bdisagreement\b/i,
-	/\bfeedback\b/i,
-	/\bfailure\b/i,
-	/\bmistake\b/i,
-	/\bproject you led\b/i,
-	/\bowned end to end\b/i,
-	/\bteam challenge\b/i,
-	/\bculture\b/i,
-	/\bvalues\b/i,
-	/\bmentor\b/i,
-	/\bstakeholder\b/i,
+  /^tell me about a time\b/i,
+  /^describe a time\b/i,
+  /^describe a situation\b/i,
+  /^share an experience\b/i,
+  /^give me an example\b/i,
+  // Broader walk-me-through: catches "walk me through your approach", "walk me through how you", etc.
+  /^walk me through\b/i,
+  /^talk about\b/i,
+  /^how do you handle\b/i,
+  /^how do you manage\b/i,
+  /^what is your .*style\b/i,
+  /^how do you make .*decision/i,
+  /^how do you influence\b/i,
+  /^how do you prioritize\b/i,
+  /\bleadership\b/i,
+  /\bconflict\b/i,
+  /\bdisagreed\b/i,
+  /\bdisagreement\b/i,
+  /\bfeedback\b/i,
+  /\bfailure\b/i,
+  /\bmistake\b/i,
+  /\bproject you led\b/i,
+  /\bowned end to end\b/i,
+  /\bteam challenge\b/i,
+  /\bculture\b/i,
+  /\bvalues\b/i,
+  /\bmentor\b/i,
+  /\bstakeholder\b/i,
 ];
 
 export function isBehavioralQuestionText(
@@ -159,25 +253,37 @@ export interface TranscriptSuggestionDecision {
 }
 
 export interface TranscriptSuggestionIntelligenceManager {
-	getActiveReasoningThread(): ReasoningThread | null;
-	getFormattedContext(lastSeconds: number): string;
-	handleSuggestionTrigger(trigger: {
-		context: string;
-		lastQuestion: string;
-		confidence: number;
-		imagePaths?: string[];
-	}): Promise<void>;
+  getActiveReasoningThread(): ReasoningThread | null;
+  getFormattedContext(lastSeconds: number): string;
+  handleSuggestionTrigger(trigger: {
+    context: string;
+    lastQuestion: string;
+    confidence: number;
+    sourceUtteranceId?: string;
+    imagePaths?: string[];
+  }): Promise<void>;
 }
 
 export interface TranscriptSuggestionInput {
-	speaker: string;
-	text: string;
-	final: boolean;
-	confidence?: number;
-	consciousModeEnabled: boolean;
-	intelligenceManager: TranscriptSuggestionIntelligenceManager;
-	imagePaths?: string[];
+  speaker: string;
+  text: string;
+  final: boolean;
+  confidence?: number;
+  consciousModeEnabled: boolean;
+  intelligenceManager: TranscriptSuggestionIntelligenceManager;
+  utteranceBuffer?: InterviewerUtteranceBuffer;
+  triggerAuditLog?: TriggerAuditLog;
+  /**
+   * NAT-SCREENSHOT-AUTOATTACH: Screenshots queued before the interviewer
+   * spoke. Forwarded into the suggestion trigger so the LLM sees both
+   * the audio question and the visual context (e.g. user pre-captured a
+   * coderpad before the question landed). Conscious-mode wiring lives
+   * in `AppState.transcriptHandler`.
+   */
+  imagePaths?: string[];
 }
+
+const defaultInterviewerUtteranceBuffer = new InterviewerUtteranceBuffer();
 
 function normalizeText(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
@@ -239,21 +345,105 @@ function hasBehavioralAnswerSubstance(
 	);
 }
 
-export function createEmptyConsciousModeResponse(
-	mode: ConsciousModeResponseMode = "reasoning_first",
-): ConsciousModeStructuredResponse {
-	return {
-		mode,
-		openingReasoning: "",
-		implementationPlan: [],
-		tradeoffs: [],
-		edgeCases: [],
-		scaleConsiderations: [],
-		pushbackResponses: [],
-		likelyFollowUps: [],
-		codeTransition: "",
-		behavioralAnswer: null,
-	};
+function normalizeCodingProblemUnderstanding(value: unknown): ConsciousCodingProblemUnderstanding {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    task: normalizeText(source.task),
+    inputsOutputsConstraints: normalizeText(source.inputsOutputsConstraints),
+    trickyCases: normalizeList(source.trickyCases),
+    hiddenAssumptions: normalizeList(source.hiddenAssumptions),
+    interviewerEvaluation: normalizeText(source.interviewerEvaluation),
+  };
+}
+
+function normalizeCodingApproach(value: unknown): ConsciousCodingApproach {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    intuition: normalizeText(source.intuition),
+    whyItWorks: normalizeText(source.whyItWorks),
+    whyBruteForceInsufficient: normalizeText(source.whyBruteForceInsufficient),
+    optimizationInsight: normalizeText(source.optimizationInsight),
+    dataStructureChoice: normalizeText(source.dataStructureChoice),
+    code: normalizeText(source.code),
+    timeComplexity: normalizeText(source.timeComplexity),
+    timeComplexityReasoning: normalizeText(source.timeComplexityReasoning),
+    spaceComplexity: normalizeText(source.spaceComplexity),
+    spaceComplexityReasoning: normalizeText(source.spaceComplexityReasoning),
+  };
+}
+
+function normalizeCodingInterviewReasoning(value: unknown): ConsciousCodingInterviewReasoning {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    whyPreferred: normalizeText(source.whyPreferred),
+    alternatives: normalizeList(source.alternatives),
+    dataStructureRationale: normalizeText(source.dataStructureRationale),
+    commonFollowUps: normalizeList(source.commonFollowUps),
+  };
+}
+
+function hasCodingApproachSubstance(value: ConsciousCodingApproach | null | undefined): boolean {
+  return Boolean(
+    value?.intuition
+    || value?.whyItWorks
+    || value?.whyBruteForceInsufficient
+    || value?.optimizationInsight
+    || value?.dataStructureChoice
+    || value?.code
+    || value?.timeComplexity
+    || value?.timeComplexityReasoning
+    || value?.spaceComplexity
+    || value?.spaceComplexityReasoning
+  );
+}
+
+function hasCodingInterviewAnswerSubstance(value: ConsciousCodingInterviewAnswer | null | undefined): boolean {
+  return Boolean(
+    value?.problemUnderstanding.task
+    || value?.problemUnderstanding.inputsOutputsConstraints
+    || value?.problemUnderstanding.trickyCases.length
+    || value?.problemUnderstanding.hiddenAssumptions.length
+    || value?.problemUnderstanding.interviewerEvaluation
+    || hasCodingApproachSubstance(value?.bruteForceApproach)
+    || hasCodingApproachSubstance(value?.optimizedApproach)
+    || value?.tradeoffsAndInterviewReasoning.whyPreferred
+    || value?.tradeoffsAndInterviewReasoning.alternatives.length
+    || value?.tradeoffsAndInterviewReasoning.dataStructureRationale
+    || value?.tradeoffsAndInterviewReasoning.commonFollowUps.length
+  );
+}
+
+function normalizeCodingInterviewAnswer(value: unknown): ConsciousCodingInterviewAnswer | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const normalized: ConsciousCodingInterviewAnswer = {
+    language: normalizeText(source.language),
+    problemUnderstanding: normalizeCodingProblemUnderstanding(source.problemUnderstanding),
+    bruteForceApproach: normalizeCodingApproach(source.bruteForceApproach),
+    optimizedApproach: normalizeCodingApproach(source.optimizedApproach),
+    tradeoffsAndInterviewReasoning: normalizeCodingInterviewReasoning(source.tradeoffsAndInterviewReasoning),
+  };
+
+  return hasCodingInterviewAnswerSubstance(normalized) ? normalized : null;
+}
+
+export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
+  return {
+    mode,
+    openingReasoning: '',
+    implementationPlan: [],
+    tradeoffs: [],
+    edgeCases: [],
+    scaleConsiderations: [],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+    codingInterviewAnswer: null,
+    behavioralAnswer: null,
+  };
 }
 
 function normalizePushbackResponses(value: unknown): string[] {
@@ -295,57 +485,43 @@ function normalizeCodeTransition(value: unknown, codeBlock: unknown): string {
 	return `Here is the code path I would walk through:\n\`\`\`${language}\n${code}\n\`\`\``;
 }
 
-export function normalizeConsciousModeResponse(
-	value:
-		| (Partial<ConsciousModeStructuredResponse> & {
-				schemaVersion?: unknown;
-				spokenResponse?: unknown;
-				codeBlock?: unknown;
-				pushbackResponses?: unknown;
-		  })
-		| null
-		| undefined,
-): ConsciousModeStructuredResponse {
-	const hasCanonicalMode = value?.mode === "reasoning_first";
-	const hasAdaptableLegacyPayload = Boolean(
-		normalizeText(value?.openingReasoning) ||
-			normalizeText(value?.spokenResponse) ||
-			normalizeList(value?.implementationPlan).length ||
-			normalizeList(value?.tradeoffs).length ||
-			normalizeCodeTransition(value?.codeTransition, value?.codeBlock) ||
-			hasBehavioralAnswerSubstance(
-				normalizeBehavioralAnswer(
-					(value as Record<string, unknown> | undefined)?.behavioralAnswer,
-				),
-			),
-	);
-	const mode =
-		hasCanonicalMode || hasAdaptableLegacyPayload
-			? "reasoning_first"
-			: "invalid";
-	const behavioralAnswer = normalizeBehavioralAnswer(
-		(value as Record<string, unknown> | undefined)?.behavioralAnswer,
-	);
-	const openingReasoning =
-		normalizeText(value?.openingReasoning) ||
-		normalizeText(value?.spokenResponse) ||
-		behavioralAnswer?.headline ||
-		"";
-	return {
-		mode,
-		openingReasoning,
-		implementationPlan: normalizeList(value?.implementationPlan),
-		tradeoffs: normalizeList(value?.tradeoffs),
-		edgeCases: normalizeList(value?.edgeCases),
-		scaleConsiderations: normalizeList(value?.scaleConsiderations),
-		pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
-		likelyFollowUps: normalizeList(value?.likelyFollowUps),
-		codeTransition: normalizeCodeTransition(
-			value?.codeTransition,
-			value?.codeBlock,
-		),
-		behavioralAnswer,
-	};
+export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStructuredResponse> & {
+  schemaVersion?: unknown;
+  spokenResponse?: unknown;
+  codeBlock?: unknown;
+  pushbackResponses?: unknown;
+}) | null | undefined): ConsciousModeStructuredResponse {
+  const hasCanonicalMode = value?.mode === 'reasoning_first';
+  const hasAdaptableLegacyPayload = Boolean(
+    normalizeText(value?.openingReasoning) ||
+    normalizeText(value?.spokenResponse) ||
+    normalizeList(value?.implementationPlan).length ||
+    normalizeList(value?.tradeoffs).length ||
+    normalizeCodeTransition(value?.codeTransition, value?.codeBlock) ||
+    hasCodingInterviewAnswerSubstance(normalizeCodingInterviewAnswer((value as Record<string, unknown> | undefined)?.codingInterviewAnswer)) ||
+    hasBehavioralAnswerSubstance(normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer))
+  );
+  const mode = hasCanonicalMode || hasAdaptableLegacyPayload ? 'reasoning_first' : 'invalid';
+  const behavioralAnswer = normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer);
+  const codingInterviewAnswer = normalizeCodingInterviewAnswer((value as Record<string, unknown> | undefined)?.codingInterviewAnswer);
+  const openingReasoning = normalizeText(value?.openingReasoning)
+    || normalizeText(value?.spokenResponse)
+    || behavioralAnswer?.headline
+    || codingInterviewAnswer?.problemUnderstanding.task
+    || '';
+  return {
+    mode,
+    openingReasoning,
+    implementationPlan: normalizeList(value?.implementationPlan),
+    tradeoffs: normalizeList(value?.tradeoffs),
+    edgeCases: normalizeList(value?.edgeCases),
+    scaleConsiderations: normalizeList(value?.scaleConsiderations),
+    pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
+    likelyFollowUps: normalizeList(value?.likelyFollowUps),
+    codeTransition: normalizeCodeTransition(value?.codeTransition, value?.codeBlock),
+    codingInterviewAnswer,
+    behavioralAnswer,
+  };
 }
 
 export function isValidConsciousModeResponse(
@@ -355,17 +531,18 @@ export function isValidConsciousModeResponse(
 		return false;
 	}
 
-	return Boolean(
-		response.openingReasoning ||
-			response.implementationPlan.length ||
-			response.tradeoffs.length ||
-			response.edgeCases.length ||
-			response.scaleConsiderations.length ||
-			response.pushbackResponses.length ||
-			response.likelyFollowUps.length ||
-			response.codeTransition ||
-			hasBehavioralAnswerSubstance(response.behavioralAnswer),
-	);
+  return Boolean(
+    response.openingReasoning ||
+    response.implementationPlan.length ||
+    response.tradeoffs.length ||
+    response.edgeCases.length ||
+    response.scaleConsiderations.length ||
+    response.pushbackResponses.length ||
+    response.likelyFollowUps.length ||
+    response.codeTransition ||
+    hasCodingInterviewAnswerSubstance(response.codingInterviewAnswer) ||
+    hasBehavioralAnswerSubstance(response.behavioralAnswer)
+  );
 }
 
 export function parseConsciousModeResponse(
@@ -402,28 +579,19 @@ export function mergeConsciousModeResponses(
 	base: ConsciousModeStructuredResponse,
 	incoming: ConsciousModeStructuredResponse,
 ): ConsciousModeStructuredResponse {
-	return {
-		mode: "reasoning_first",
-		openingReasoning: incoming.openingReasoning || base.openingReasoning,
-		implementationPlan: mergeList(
-			base.implementationPlan,
-			incoming.implementationPlan,
-		),
-		tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
-		edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
-		scaleConsiderations: mergeList(
-			base.scaleConsiderations,
-			incoming.scaleConsiderations,
-		),
-		pushbackResponses: mergeList(
-			base.pushbackResponses,
-			incoming.pushbackResponses,
-		),
-		likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
-		codeTransition: incoming.codeTransition || base.codeTransition,
-		behavioralAnswer:
-			incoming.behavioralAnswer || base.behavioralAnswer || null,
-	};
+  return {
+    mode: 'reasoning_first',
+    openingReasoning: incoming.openingReasoning || base.openingReasoning,
+    implementationPlan: mergeList(base.implementationPlan, incoming.implementationPlan),
+    tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
+    edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
+    scaleConsiderations: mergeList(base.scaleConsiderations, incoming.scaleConsiderations),
+    pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
+    likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
+    codeTransition: incoming.codeTransition || base.codeTransition,
+    codingInterviewAnswer: incoming.codingInterviewAnswer || base.codingInterviewAnswer || null,
+    behavioralAnswer: incoming.behavioralAnswer || base.behavioralAnswer || null,
+  };
 }
 
 function formatSection(label: string, values: string[]): string[] {
@@ -466,15 +634,74 @@ function formatBehavioralAnswer(answer: ConsciousBehavioralAnswer): string[] {
 	return parts.filter(Boolean);
 }
 
-export function formatConsciousModeResponseChunks(
-	response: ConsciousModeStructuredResponse,
-): string[] {
-	if (
-		response.behavioralAnswer &&
-		hasBehavioralAnswerSubstance(response.behavioralAnswer)
-	) {
-		return formatBehavioralAnswer(response.behavioralAnswer);
-	}
+function fallbackText(value: string | null | undefined): string {
+  return value?.trim() || 'Not specified.';
+}
+
+function formatInlineList(values: string[]): string {
+  return values.length > 0 ? values.join('; ') : 'Not specified.';
+}
+
+function formatCodeBlock(language: string, code: string): string {
+  const lang = language.trim() || 'text';
+  return code.trim() ? `\`\`\`${lang}\n${code.trim()}\n\`\`\`` : 'Not provided.';
+}
+
+function formatCodingInterviewAnswer(answer: ConsciousCodingInterviewAnswer): string[] {
+  const language = answer.language || 'text';
+  const understanding = answer.problemUnderstanding;
+  const brute = answer.bruteForceApproach;
+  const optimized = answer.optimizedApproach;
+  const reasoning = answer.tradeoffsAndInterviewReasoning;
+
+  return [
+    [
+      'A. Problem Understanding',
+      `Task: ${fallbackText(understanding.task)}`,
+      `Inputs / outputs / constraints: ${fallbackText(understanding.inputsOutputsConstraints)}`,
+      `Tricky cases: ${formatInlineList(understanding.trickyCases)}`,
+      `Hidden assumptions / ambiguity: ${formatInlineList(understanding.hiddenAssumptions)}`,
+      `What the interviewer is evaluating: ${fallbackText(understanding.interviewerEvaluation)}`,
+    ].join('\n'),
+    [
+      'B. Brute Force Approach',
+      `Naive intuition: ${fallbackText(brute.intuition)}`,
+      `Why it works: ${fallbackText(brute.whyItWorks)}`,
+      `Code:\n${formatCodeBlock(language, brute.code)}`,
+      `Time Complexity: ${fallbackText(brute.timeComplexity)}`,
+      `Why that time occurs: ${fallbackText(brute.timeComplexityReasoning)}`,
+      `Space Complexity: ${fallbackText(brute.spaceComplexity)}`,
+      `Why that space occurs: ${fallbackText(brute.spaceComplexityReasoning)}`,
+    ].join('\n'),
+    [
+      'C. Optimized Approach',
+      `Why brute force is insufficient: ${fallbackText(optimized.whyBruteForceInsufficient)}`,
+      `Optimization insight: ${fallbackText(optimized.optimizationInsight)}`,
+      `Data structure / algorithm choice: ${fallbackText(optimized.dataStructureChoice)}`,
+      `Code:\n${formatCodeBlock(language, optimized.code)}`,
+      `Time Complexity: ${fallbackText(optimized.timeComplexity)}`,
+      `Why that time occurs: ${fallbackText(optimized.timeComplexityReasoning)}`,
+      `Space Complexity: ${fallbackText(optimized.spaceComplexity)}`,
+      `Why that space occurs: ${fallbackText(optimized.spaceComplexityReasoning)}`,
+    ].join('\n'),
+    [
+      'D. Tradeoffs & Interview Reasoning',
+      `Why this approach is preferred: ${fallbackText(reasoning.whyPreferred)}`,
+      `Alternative approaches: ${formatInlineList(reasoning.alternatives)}`,
+      `Data structure rationale: ${fallbackText(reasoning.dataStructureRationale)}`,
+      `Common interviewer follow-ups: ${formatInlineList(reasoning.commonFollowUps)}`,
+    ].join('\n'),
+  ];
+}
+
+export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
+  if (response.codingInterviewAnswer && hasCodingInterviewAnswerSubstance(response.codingInterviewAnswer)) {
+    return formatCodingInterviewAnswer(response.codingInterviewAnswer);
+  }
+
+  if (response.behavioralAnswer && hasBehavioralAnswerSubstance(response.behavioralAnswer)) {
+    return formatBehavioralAnswer(response.behavioralAnswer);
+  }
 
 	const chunks: string[] = [];
 
@@ -529,12 +756,19 @@ export function tryParseConsciousModeOpeningReasoning(
 }
 
 function isQuestionLike(lower: string): boolean {
-	return (
-		/\?$/.test(lower) ||
-		/^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me|give me|describe|share|talk about)/i.test(
-			lower,
-		)
-	);
+  return /\?$/.test(lower) || hasQuestionPrefix(lower);
+}
+
+function hasTerminalPunctuation(text: string): boolean {
+  return /[.!?]$/.test(text.trim());
+}
+
+function hasQuestionPrefix(lower: string): boolean {
+  return /^(how|what|what's|why|when|where|which|who|can|could|would|should|tell me|give me|describe|explain|walk me through|talk about|share|how would you|what is your approach|what's your approach)\b/i.test(lower);
+}
+
+function stripTrailingPunctuation(text: string): string {
+  return text.replace(/[.!?]+$/, '');
 }
 
 function isSubstantialConversationTurn(lower: string): boolean {
@@ -550,9 +784,9 @@ function isSubstantialConversationTurn(lower: string): boolean {
 }
 
 function isBroadConsciousSeed(lower: string): boolean {
-	return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|partition|failover|bottleneck|consistency|availability|backpressure|hotspot|rate limiter|data model|ledger|notification system|streaming system|distributed)/i.test(
-		lower,
-	);
+  // Strip trailing punctuation so "limiters?" matches "limiters" word boundary
+  const clean = stripTrailingPunctuation(lower);
+  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(clean);
 }
 
 function isBehavioralPrompt(lower: string): boolean {
@@ -566,9 +800,11 @@ function isAdministrativePrompt(lower: string): boolean {
 }
 
 function isSystemDesignQuestion(lower: string): boolean {
-	return /(^how would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b)/i.test(
-		lower,
-	);
+  // NOTE: removed ^ anchors so phrases like "So how would you design..." match.
+  // Added \b word boundaries to prevent false positives.
+  // Strip trailing punctuation so "limiter?" matches "limiter" word boundary
+  const clean = stripTrailingPunctuation(lower);
+  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(clean);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {
@@ -590,9 +826,7 @@ function isExplicitTopicShift(lower: string): boolean {
 }
 
 function isShortActionablePrompt(lower: string): boolean {
-	return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(
-		lower,
-	);
+  return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|walk me through it|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks|what's your approach|what is your approach)$/i.test(lower);
 }
 
 function isActionableInterviewerPrompt(lower: string): boolean {
@@ -605,9 +839,7 @@ function isActionableInterviewerPrompt(lower: string): boolean {
 		return true;
 	}
 
-	return (
-		(isQuestionLike(lower) && words.length >= 4) || isBroadConsciousSeed(lower)
-	);
+  return (isQuestionLike(lower) && words.length >= 4) || (words.length >= 6 && isBroadConsciousSeed(lower));
 }
 
 export function classifyConsciousModeQuestion(
@@ -670,9 +902,10 @@ export function classifyConsciousModeQuestion(
 }
 
 export function shouldAutoTriggerSuggestionFromTranscript(
-	text: string,
-	consciousModeEnabled: boolean,
-	activeReasoningThread: ReasoningThread | null,
+  text: string,
+  consciousModeEnabled: boolean,
+  activeReasoningThread: ReasoningThread | null,
+  isBufferFlushEvent: boolean = false,
 ): boolean {
 	const trimmed = normalizeText(text);
 	if (!trimmed) {
@@ -688,104 +921,255 @@ export function shouldAutoTriggerSuggestionFromTranscript(
 		);
 	}
 
-	const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-	return trimmed.endsWith("?") || wordCount >= 5;
+  const lower = trimmed.toLowerCase();
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  return hasTerminalPunctuation(trimmed) || (hasQuestionPrefix(lower) && wordCount >= 4);
 }
 
 export function getTranscriptSuggestionDecision(
-	text: string,
-	consciousModeEnabled: boolean,
-	activeReasoningThread: ReasoningThread | null,
+  text: string,
+  consciousModeEnabled: boolean,
+  activeReasoningThread: ReasoningThread | null,
+  isBufferFlushEvent: boolean = false,
 ): TranscriptSuggestionDecision {
-	const lastQuestion = normalizeText(text);
-	return {
-		shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(
-			lastQuestion,
-			consciousModeEnabled,
-			activeReasoningThread,
-		),
-		lastQuestion,
-	};
+  const lastQuestion = normalizeText(text);
+  return {
+    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread, isBufferFlushEvent),
+    lastQuestion,
+  };
+}
+
+function snippet(text: string): string {
+  const normalized = normalizeText(text);
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function auditTriggerDecision(
+  log: TriggerAuditLog,
+  input: {
+    utteranceId?: string;
+    speaker: string;
+    text: string;
+    reasonCode: TriggerDecisionReasonCode;
+    outcome: 'accepted' | 'declined' | 'stale' | 'completed';
+    cohort: TriggerDecisionCohort;
+    requestOutcome?: string;
+  },
+): void {
+  log.record({
+    timestamp: Date.now(),
+    utteranceId: input.utteranceId,
+    speaker: input.speaker,
+    textSnippet: snippet(input.text),
+    reasonCode: input.reasonCode,
+    outcome: input.outcome,
+    cohort: input.cohort,
+    requestOutcome: input.requestOutcome,
+  });
+}
+
+async function triggerFromCandidate(input: TranscriptSuggestionInput, candidate: {
+  text: string;
+  speaker: string;
+  sourceUtteranceId?: string;
+  isBufferFlushEvent: boolean;
+  auditLog: TriggerAuditLog;
+  cohort: TriggerDecisionCohort;
+}): Promise<boolean> {
+  const activeThread = input.intelligenceManager.getActiveReasoningThread();
+  console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
+
+  const decision = getTranscriptSuggestionDecision(
+    candidate.text,
+    input.consciousModeEnabled,
+    activeThread,
+    candidate.isBufferFlushEvent,
+  );
+
+  console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
+    shouldTrigger: decision.shouldTrigger,
+    lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
+    questionLength: decision.lastQuestion.length,
+    hasActiveThread: !!activeThread,
+    consciousModeEnabled: input.consciousModeEnabled,
+    sourceUtteranceId: candidate.sourceUtteranceId,
+  });
+
+  if (!decision.shouldTrigger) {
+    console.log('[AUTO-TRIGGER] ❌ Decision logic declined to trigger');
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: decision.lastQuestion ? 'declined_no_punctuation' : 'declined_too_short',
+      outcome: 'declined',
+      cohort: candidate.cohort,
+    });
+    return false;
+  }
+
+  try {
+    const context = input.intelligenceManager.getFormattedContext(180);
+    console.log(`[AUTO-TRIGGER] 📝 Context length: ${context ? context.length : 0} chars`);
+    console.log('[AUTO-TRIGGER] 🚀 Calling handleSuggestionTrigger...');
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: 'fired',
+      outcome: 'accepted',
+      cohort: candidate.cohort,
+    });
+
+    // NAT-SCREENSHOT-RELEVANCE: Gate auto-attach by question shape.
+    // Recency was already filtered upstream in `AppState` via
+    // `getRecentScreenshots`; here we guard against attaching even
+    // a fresh screenshot to a behavioral / off-topic transcript turn,
+    // which produces a confidently-wrong answer ("tell me about a
+    // time" + a Two Sum image is the canonical failure mode).
+    const candidateImagePaths = input.imagePaths && input.imagePaths.length > 0 ? input.imagePaths : undefined;
+    const attachImages = candidateImagePaths
+      ? shouldAutoAttachScreenshotsForQuestion(decision.lastQuestion)
+      : false;
+    if (candidateImagePaths && !attachImages) {
+      console.log('[AUTO-TRIGGER] 🖼️  Suppressing screenshot auto-attach: question is not coding-shaped', {
+        lastQuestion: decision.lastQuestion.substring(0, 80) + (decision.lastQuestion.length > 80 ? '...' : ''),
+        queuedImages: candidateImagePaths.length,
+      });
+    }
+
+    const trigger = {
+      context,
+      lastQuestion: decision.lastQuestion,
+      confidence: input.confidence ?? 0.8,
+      ...(candidate.sourceUtteranceId ? { sourceUtteranceId: candidate.sourceUtteranceId } : {}),
+      ...(attachImages && candidateImagePaths ? { imagePaths: candidateImagePaths } : {}),
+    };
+    await input.intelligenceManager.handleSuggestionTrigger(trigger);
+
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: 'completed',
+      outcome: 'completed',
+      cohort: candidate.cohort,
+      requestOutcome: 'completed',
+    });
+    console.log('[AUTO-TRIGGER] ✅ Successfully triggered LLM response');
+    return true;
+  } catch (error) {
+    console.error('[AUTO-TRIGGER] 🚨 Failed to trigger:', error);
+    return false;
+  }
 }
 
 export async function maybeHandleSuggestionTriggerFromTranscript(
 	input: TranscriptSuggestionInput,
 ): Promise<boolean> {
-	console.log("[AUTO-TRIGGER] 🔍 Processing transcript:", {
-		speaker: input.speaker,
-		final: input.final,
-		textLength: input.text.length,
-		textPreview:
-			input.text.substring(0, 50) + (input.text.length > 50 ? "..." : ""),
-		consciousMode: input.consciousModeEnabled,
-		confidence: input.confidence,
-		hasIntelligenceManager: !!input.intelligenceManager,
-	});
+  const flags = getOptimizationFlags();
+  const auditLog = input.triggerAuditLog ?? getDefaultTriggerAuditLog();
+  const cohort: TriggerDecisionCohort = flags.useUtteranceLevelTriggering ? 'utterance_level' : 'legacy_fragment';
+  console.log('[AUTO-TRIGGER] 🔍 Processing transcript:', {
+    speaker: input.speaker,
+    final: input.final,
+    textLength: input.text.length,
+    textPreview: input.text.substring(0, 50) + (input.text.length > 50 ? '...' : ''),
+    consciousMode: input.consciousModeEnabled,
+    confidence: input.confidence,
+    hasIntelligenceManager: !!input.intelligenceManager
+  });
+  
+  const speakerAllowed = input.speaker === 'interviewer' || (input.speaker === 'user' && flags.useMicTranscriptTriggers);
+  if (!speakerAllowed) {
+    console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_speaker',
+      outcome: 'declined',
+      cohort,
+    });
+    return false;
+  }
 
-	if (input.speaker !== "interviewer") {
-		console.log(
-			`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`,
-		);
-		return false;
-	}
+  // NAT-006 / audit A-6: never let an interim (non-final) transcript drive
+  // `handleSuggestionTrigger`. Interim hypotheses are routinely revised or
+  // outright discarded by the STT provider; acting on them produces an
+  // answer for a question the user never finished asking, which the user
+  // then sees and which we either have to hide (UX flicker) or replace
+  // (wasted token spend + provenance confusion).
+  //
+  // Speculative paths (prefetch / planner warm-up) live elsewhere
+  // (ConsciousAccelerationOrchestrator) and remain free to act on
+  // interim text — but only the *final* transcript is allowed to commit
+  // to a user-visible answer.
+  if (!input.final) {
+    console.log(
+      `[AUTO-TRIGGER] ❌ Rejected: transcript is interim (final=false, confidence=${input.confidence ?? 'n/a'})`,
+    );
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_no_punctuation',
+      outcome: 'declined',
+      cohort,
+    });
+    return false;
+  }
 
-	if (!input.final && input.confidence != null && input.confidence < 0.5) {
-		console.log(
-			"[AUTO-TRIGGER] ❌ Rejected: interim transcript with low confidence",
-		);
-		return false;
-	}
+  // Belt-and-suspenders: even when `final === true`, refuse low-confidence
+  // finals. Some providers emit best-effort finals on UtteranceEnd timers
+  // (see NAT-009) which can be unreliable.
+  if (input.confidence != null && input.confidence < 0.5) {
+    console.log('[AUTO-TRIGGER] ❌ Rejected: final transcript with low confidence');
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_too_short',
+      outcome: 'declined',
+      cohort,
+    });
+    return false;
+  }
 
-	const activeThread = input.intelligenceManager.getActiveReasoningThread();
-	console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
+  if (flags.useUtteranceLevelTriggering) {
+    const buffer = input.utteranceBuffer ?? defaultInterviewerUtteranceBuffer;
+    const pendingFlushes: Promise<boolean>[] = [];
+    buffer.setOnUtterance((utterance: BufferedUtterance) => {
+      const pending = triggerFromCandidate(input, {
+        text: utterance.text,
+        speaker: utterance.speaker,
+        sourceUtteranceId: utterance.utteranceId,
+        isBufferFlushEvent: true,
+        auditLog,
+        cohort,
+      });
+      pendingFlushes.push(pending);
+      void pending;
+    });
 
-	const decision = getTranscriptSuggestionDecision(
-		input.text,
-		input.consciousModeEnabled,
-		activeThread,
-	);
+    const flushed = buffer.pushFragment(input.speaker, input.text, input.final);
+    if (flushed.length === 0) {
+      auditTriggerDecision(auditLog, {
+        speaker: input.speaker,
+        text: input.text,
+        reasonCode: 'declined_no_punctuation',
+        outcome: 'declined',
+        cohort,
+      });
+      return false;
+    }
 
-	const speculative =
-		!input.final && input.confidence != null && input.confidence >= 0.5;
-	if (speculative) {
-		console.log(
-			"[AUTO-TRIGGER] ⚡ Proceeding with speculative trigger (interim but high confidence)",
-		);
-	}
+    const results = await Promise.all(pendingFlushes);
+    return results.some(Boolean);
+  }
 
-	console.log("[AUTO-TRIGGER] 📊 Decision analysis:", {
-		shouldTrigger: decision.shouldTrigger,
-		lastQuestion:
-			decision.lastQuestion.substring(0, 50) +
-			(decision.lastQuestion.length > 50 ? "..." : ""),
-		questionLength: decision.lastQuestion.length,
-		hasActiveThread: !!activeThread,
-		consciousModeEnabled: input.consciousModeEnabled,
-	});
-
-	if (!decision.shouldTrigger) {
-		console.log("[AUTO-TRIGGER] ❌ Decision logic declined to trigger");
-		return false;
-	}
-
-	try {
-		const context = input.intelligenceManager.getFormattedContext(180);
-		console.log(
-			`[AUTO-TRIGGER] 📝 Context length: ${context ? context.length : 0} chars`,
-		);
-		console.log("[AUTO-TRIGGER] 🚀 Calling handleSuggestionTrigger...");
-
-		await input.intelligenceManager.handleSuggestionTrigger({
-			context: context,
-			lastQuestion: decision.lastQuestion,
-			confidence: input.confidence ?? 0.8,
-			imagePaths: input.imagePaths,
-		});
-
-		console.log("[AUTO-TRIGGER] ✅ Successfully triggered LLM response");
-		return true;
-	} catch (error) {
-		console.error("[AUTO-TRIGGER] 🚨 Failed to trigger:", error);
-		return false;
-	}
+  return triggerFromCandidate(input, {
+    text: input.text,
+    speaker: input.speaker,
+    isBufferFlushEvent: false,
+    auditLog,
+    cohort,
+  });
 }

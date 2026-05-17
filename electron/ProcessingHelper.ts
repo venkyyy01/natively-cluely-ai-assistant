@@ -1,10 +1,11 @@
 // ProcessingHelper.ts
 
-import { app, BrowserWindow } from "electron";
-import { LLMHelper } from "./LLMHelper";
-import type { AppState } from "./main";
-import { CredentialsManager } from "./services/CredentialsManager";
-
+import { AppState } from "./main"
+import { LLMHelper } from "./LLMHelper"
+import { CredentialsManager } from "./services/CredentialsManager"
+import { app, BrowserWindow } from "electron"
+import { extractCodingProblem, isCodingProblemComplete, hasPartialCodingSignal } from "./coding/ProblemExtractor"
+import { isConsciousOptimizationActive } from "./config/optimizations"
 // import dotenv from "dotenv" // Removed static import
 
 if (!app.isPackaged) {
@@ -184,90 +185,112 @@ export class ProcessingHelper {
 		}
 	}
 
-	public async processScreenshots(): Promise<void> {
-		const mainWindow = this.appState.getMainWindow();
-		if (!mainWindow) return;
+    if (view === "queue") {
+      const screenshotQueue = [...this.appState.getScreenshotHelper().getScreenshotQueue()]
+      if (screenshotQueue.length === 0) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
+        return
+      }
 
-		const view = this.appState.getView();
+      const allPaths = screenshotQueue;
 
-		if (view === "queue") {
-			const screenshotQueue = this.appState
-				.getScreenshotHelper()
-				.getScreenshotQueue();
-			if (screenshotQueue.length === 0) {
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS,
-				);
-				return;
-			}
+      // NEW: Handle screenshot as plain text (like audio)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+      }
+      this.appState.setView("solutions")
+      this.currentProcessingAbortController?.abort()
+      this.currentProcessingAbortController = new AbortController()
+      try {
+        // NAT-303: Route through ProblemExtractor when flag is ON.
+        const useExtractor = isConsciousOptimizationActive('useStructuredProblemExtractor');
+        if (useExtractor) {
+          const codingProblem = await extractCodingProblem(allPaths, {
+            signal: this.currentProcessingAbortController.signal,
+            visionCall: async (paths, prompt, sig) => {
+              const result = await this.llmHelper.analyzeImageFiles(paths, sig);
+              return result.text;
+            },
+          });
+          if (this.currentProcessingAbortController.signal.aborted) return;
 
-			const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
+          // Back-compat legacy problemInfo shape for existing consumers.
+          const problemInfo = {
+            problem_statement: codingProblem.problemStatement || codingProblem.rawOcr || '',
+            input_format: { description: codingProblem.inputSpec || 'N/A', parameters: [] as any[] },
+            output_format: { description: codingProblem.outputSpec || 'N/A', type: 'string', subtype: 'text' },
+            complexity: { time: 'N/A', space: 'N/A' },
+            test_cases: codingProblem.examples.map((e) => ({ input: e.input, output: e.output })),
+            validation_type: 'manual',
+            difficulty: codingProblem.difficulty,
+            // Additive enrichment
+            codingProblem,
+            extraction_partial: !isCodingProblemComplete(codingProblem),
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
+          // NAT-303: Push structured CodingProblem into SessionTracker for Tier-A prompt injection.
+          // Originally only complete problems were stored. NAT-OCR-1 extends
+          // this to also store *partial* extractions when the raw OCR looks
+          // like a coding screenshot (`hasPartialCodingSignal`). The
+          // ConsciousOrchestrator now produces a degraded `<problem_context_partial>`
+          // block from those — critical for Groq / Cerebras / Ollama where
+          // the vision-merge step can't run and we'd otherwise lose all
+          // problem context for the A/B/C/D answer contract.
+          const session = this.appState.getIntelligenceManager().getSessionTracker();
+          const shouldStore = isCodingProblemComplete(codingProblem) || hasPartialCodingSignal(codingProblem);
+          session.setCodingProblem(shouldStore ? codingProblem : null);
+        } else {
+          const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
+          if (this.currentProcessingAbortController.signal.aborted) {
+            return
+          }
+          const problemInfo = {
+            problem_statement: imageResult.text,
+            input_format: { description: "Generated from screenshot", parameters: [] as any[] },
+            output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
+            complexity: { time: "N/A", space: "N/A" },
+            test_cases: [] as any[],
+            validation_type: "manual",
+            difficulty: "custom"
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
+        }
+      } catch (error: any) {
+        if (this.currentProcessingAbortController?.signal.aborted) {
+          return
+        }
+        // console.error("Image processing error:", error)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        }
+      } finally {
+        this.currentProcessingAbortController = null
+      }
+      return;
+    } else {
+      // Debug mode
+      const extraScreenshotQueue = [...this.appState.getScreenshotHelper().getExtraScreenshotQueue()]
+      if (extraScreenshotQueue.length === 0) {
+        // console.log("No extra screenshots to process")
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
+        return
+      }
 
-			// NEW: Handle screenshot as plain text (like audio)
-			mainWindow.webContents.send(
-				this.appState.PROCESSING_EVENTS.INITIAL_START,
-			);
-			this.appState.setView("solutions");
-			this.currentProcessingAbortController?.abort();
-			this.currentProcessingAbortController = new AbortController();
-			try {
-				const imageResult = await this.llmHelper.analyzeImageFiles(
-					allPaths,
-					this.currentProcessingAbortController.signal,
-				);
-				if (this.currentProcessingAbortController.signal.aborted) {
-					return;
-				}
-				const problemInfo = {
-					problem_statement: imageResult.text,
-					input_format: {
-						description: "Generated from screenshot",
-						parameters: [] as any[],
-					},
-					output_format: {
-						description: "Generated from screenshot",
-						type: "string",
-						subtype: "text",
-					},
-					complexity: { time: "N/A", space: "N/A" },
-					test_cases: [] as any[],
-					validation_type: "manual",
-					difficulty: "custom",
-				};
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
-					problemInfo,
-				);
-				this.appState.setProblemInfo(problemInfo);
-			} catch (error: any) {
-				if (this.currentProcessingAbortController?.signal.aborted) {
-					return;
-				}
-				// console.error("Image processing error:", error)
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-					error.message,
-				);
-			} finally {
-				this.currentProcessingAbortController = null;
-			}
-			return;
-		} else {
-			// Debug mode
-			const extraScreenshotQueue = this.appState
-				.getScreenshotHelper()
-				.getExtraScreenshotQueue();
-			if (extraScreenshotQueue.length === 0) {
-				// console.log("No extra screenshots to process")
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS,
-				);
-				return;
-			}
-
-			mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START);
-			this.currentExtraProcessingAbortController?.abort();
-			this.currentExtraProcessingAbortController = new AbortController();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      }
+      this.currentExtraProcessingAbortController?.abort()
+      this.currentExtraProcessingAbortController = new AbortController()
 
 			try {
 				// Get problem info and current solution
@@ -297,31 +320,30 @@ export class ProcessingHelper {
 					return;
 				}
 
-				this.appState.setHasDebugged(true);
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-					debugResult,
-				);
-			} catch (error: any) {
-				if (this.currentExtraProcessingAbortController?.signal.aborted) {
-					return;
-				}
-				// console.error("Debug processing error:", error)
-				mainWindow.webContents.send(
-					this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
-					error.message,
-				);
-			} finally {
-				this.currentExtraProcessingAbortController = null;
-			}
-		}
-	}
+        this.appState.setHasDebugged(true)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            debugResult
+          )
+        }
 
-	public cancelOngoingRequests(): void {
-		if (this.currentProcessingAbortController) {
-			this.currentProcessingAbortController.abort();
-			this.currentProcessingAbortController = null;
-		}
+      } catch (error: any) {
+        if (this.currentExtraProcessingAbortController?.signal.aborted) {
+          return
+        }
+        // console.error("Debug processing error:", error)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
+            error.message
+          )
+        }
+      } finally {
+        this.currentExtraProcessingAbortController = null
+      }
+    }
+  }
 
 		if (this.currentExtraProcessingAbortController) {
 			this.currentExtraProcessingAbortController.abort();

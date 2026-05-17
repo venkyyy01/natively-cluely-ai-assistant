@@ -4,11 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 
-const helperPath =
-	process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER ||
-	path.join(process.cwd(), "assets/bin/macos/stealth-virtual-display-helper");
-const runNativeIntegration =
-	process.env.NATIVELY_RUN_MACOS_VIRTUAL_DISPLAY_INTEGRATION === "1";
+const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
+    path.join(process.cwd(), 'assets/bin/macos/system-services-helper');
+const runNativeIntegration = process.env.NATIVELY_RUN_MACOS_VIRTUAL_DISPLAY_INTEGRATION === '1';
 
 describe("MacOS Virtual Display Helper Integration", {
 	skip:
@@ -111,35 +109,27 @@ describe("MacOS Virtual Display Helper Integration", {
 });
 
 async function runHelper(args: string[]): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const helperPath =
-			process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER ||
-			path.join(
-				process.cwd(),
-				"assets/bin/macos/stealth-virtual-display-helper",
-			);
-
-		const child = spawn(helperPath, args, { stdio: ["pipe", "pipe", "pipe"] });
-		let stdout = "";
-		let stderr = "";
-
-		child.stdout.on("data", (data: Buffer) => {
-			stdout += data.toString();
-		});
-		child.stderr.on("data", (data: Buffer) => {
-			stderr += data.toString();
-		});
-
-		child.on("close", (code: number) => {
-			if (code === 0) {
-				resolve(stdout.trim());
-			} else {
-				reject(new Error(`Helper exited with code ${code}: ${stderr}`));
-			}
-		});
-
-		child.on("error", reject);
-	});
+    return new Promise((resolve, reject) => {
+        const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
+    path.join(process.cwd(), 'assets/bin/macos/system-services-helper');
+        
+        const child = spawn(helperPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        
+        child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+        child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+        
+        child.on('close', (code: number) => {
+            if (code === 0) {
+                resolve(stdout.trim());
+            } else {
+                reject(new Error(`Helper exited with code ${code}: ${stderr}`));
+            }
+        });
+        
+        child.on('error', reject);
+    });
 }
 
 async function sendRequest(

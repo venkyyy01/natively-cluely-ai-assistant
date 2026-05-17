@@ -185,15 +185,13 @@ function installIpcHandlersTestHarness(options?: {
 			};
 		}
 
-		if (request === "./services/CredentialsManager") {
-			return { CredentialsManager: { getInstance: () => credentialsManager } };
-		}
+    if (request === './services/CredentialsManager' || request === '../services/CredentialsManager') {
+      return { CredentialsManager: { getInstance: () => credentialsManager } };
+    }
 
-		if (request === "./services/OllamaManager") {
-			return {
-				OllamaManager: { getInstance: () => ({ init: async () => {} }) },
-			};
-		}
+    if (request === './services/OllamaManager' || request === '../services/OllamaManager') {
+      return { OllamaManager: { getInstance: () => ({ init: async () => {} }) } };
+    }
 
 		return originalLoad.call(this, request, parent, isMain);
 	};
@@ -262,13 +260,15 @@ function installIpcHandlersTestHarness(options?: {
 	};
 }
 
-async function initializeHandlers(
-	harness: ReturnType<typeof installIpcHandlersTestHarness>,
-) {
-	const modulePath = require.resolve("../ipcHandlers");
-	delete require.cache[modulePath];
-	const { initializeIpcHandlers } = await import("../ipcHandlers");
-	initializeIpcHandlers(harness.appState as any);
+async function initializeHandlers(harness: ReturnType<typeof installIpcHandlersTestHarness>) {
+  const modulePath = require.resolve('../ipcHandlers');
+  delete require.cache[modulePath];
+  // handlerContext binds ipcMain at module load; each test installs a fresh electron mock with a new handler map.
+  delete require.cache[require.resolve('../ipc/handlerContext')];
+  delete require.cache[require.resolve('../ipc/registerLlmCredentialsIpcHandlers')];
+  delete require.cache[require.resolve('../ipc/registerProviderSttAndTestIpcHandlers')];
+  const { initializeIpcHandlers } = await import('../ipcHandlers');
+  initializeIpcHandlers(harness.appState as any);
 }
 
 async function loadPreloadModule(
@@ -300,9 +300,11 @@ async function loadPreloadModule(
 		return originalLoad.call(this, request, parent, isMain);
 	};
 
-	const modulePath = require.resolve("../preload");
-	delete require.cache[modulePath];
-	await import("../preload");
+  const modulePath = require.resolve('../preload');
+  delete require.cache[modulePath];
+  delete require.cache[require.resolve('../preload/api')];
+  delete require.cache[require.resolve('../preload/types')];
+  await import('../preload');
 
 	return {
 		exposedApi,
@@ -672,24 +674,18 @@ test("root inference sync handlers prefer InferenceSupervisor when supervisor ru
 
 	await initializeHandlers(harness);
 
-	assert.deepEqual(
-		await harness.handlers.get("set-gemini-api-key")?.({}, "key-123"),
-		{ success: true },
-	);
-	assert.deepEqual(
-		await harness.handlers.get("switch-to-curl-provider")?.({}, "curl-1"),
-		{ success: true },
-	);
-	assert.equal(
-		await harness.handlers.get("gemini-chat")?.(
-			{},
-			"hello",
-			[],
-			undefined,
-			undefined,
-		),
-		"answer:hello",
-	);
+  assert.deepEqual(await harness.handlers.get('set-gemini-api-key')?.({}, 'key-123'), { success: true });
+  assert.deepEqual(await harness.handlers.get('switch-to-curl-provider')?.({}, 'curl-1'), { success: true });
+  assert.equal(
+    await harness.handlers.get('gemini-chat')?.(
+      {},
+      'hello',
+      [],
+      undefined,
+      { requestId: '00000000-0000-0000-0000-000000000001' },
+    ),
+    'answer:hello',
+  );
 
 	assert.deepEqual(calls, [
 		"setApiKey:key-123",
@@ -705,9 +701,109 @@ test("root inference sync handlers prefer InferenceSupervisor when supervisor ru
 	harness.restore();
 });
 
-test("root theme handlers prefer SettingsFacade when available", async () => {
-	const harness = installIpcHandlersTestHarness();
-	const calls: string[] = [];
+test('root LLM image-path IPC only allows files inside userData', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const baseLlmHelper = harness.appState.processingHelper.getLLMHelper();
+  let receivedImagePaths: string[] | undefined;
+
+  harness.appState.processingHelper.getLLMHelper = () => ({
+    ...baseLlmHelper,
+    chatWithGemini: async (_message: string, imagePaths?: string[]) => {
+      receivedImagePaths = imagePaths;
+      return 'answer';
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  await assert.rejects(async () => {
+    await harness.handlers.get('gemini-chat')?.(
+      {},
+      'hello',
+      ['/etc/passwd'],
+      undefined,
+      { requestId: '00000000-0000-0000-0000-000000000001' },
+    );
+  }, /PATH_NOT_ALLOWED/);
+
+  assert.equal(
+    await harness.handlers.get('gemini-chat')?.(
+      {},
+      'hello',
+      ['/tmp/user-data/screenshot.png'],
+      undefined,
+      { requestId: '00000000-0000-0000-0000-000000000001' },
+    ),
+    'answer',
+  );
+  assert.deepEqual(receivedImagePaths, ['/tmp/user-data/screenshot.png']);
+
+  harness.restore();
+});
+
+test('gemini-chat-stream does not persist partial assistant text when containment aborts the stream', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const baseLlmHelper = harness.appState.processingHelper.getLLMHelper();
+  let contained = false;
+  const assistantMessages: string[] = [];
+  const usageLogs: string[] = [];
+
+  Object.assign(harness.appState, {
+    isStealthContainmentActive: () => contained,
+    getIntelligenceManager: () => ({
+      addTranscript: () => {},
+      addAssistantMessage: (message: string) => {
+        assistantMessages.push(message);
+      },
+      getLastAssistantMessage: (): string | null => null,
+      getFormattedContext: () => '',
+      logUsage: (type: string, input: string, output: string) => {
+        usageLogs.push(`${type}:${input}:${output}`);
+      },
+      initializeLLMs: () => {},
+    }),
+  });
+  harness.appState.processingHelper.getLLMHelper = () => ({
+    ...baseLlmHelper,
+    async *streamChat() {
+      yield 'partial';
+      contained = true;
+      yield 'hidden';
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  const sent: Array<{ channel: string; payload?: unknown }> = [];
+  const event = {
+    sender: {
+      isDestroyed: () => false,
+      send: (channel: string, payload?: unknown) => {
+        sent.push({ channel, payload });
+      },
+    },
+  };
+
+  const requestId = '00000000-0000-0000-0000-000000000001';
+  await harness.handlers.get('gemini-chat-stream')?.(
+    event,
+    'hello',
+    [],
+    undefined,
+    { requestId },
+  );
+
+  assert.deepEqual(assistantMessages, []);
+  assert.deepEqual(usageLogs, []);
+  assert.equal(sent.some((entry) => entry.channel === `gemini-stream-final:${requestId}`), false);
+  assert.equal(sent.some((entry) => entry.payload === 'hidden'), false);
+
+  harness.restore();
+});
+
+test('root theme handlers prefer SettingsFacade when available', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const calls: string[] = [];
 
 	Object.assign(harness.appState, {
 		getSettingsFacade: () => ({
@@ -1800,63 +1896,30 @@ test("intelligence handlers prefer InferenceSupervisor when supervisor runtime i
 		},
 	};
 
-	registerIntelligenceHandlers({
-		appState: appState as any,
-		...registry,
-	} as any);
+  registerIntelligenceHandlers({ appState: appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
 
-	assert.deepEqual(await registry.handlers.get("generate-assist")?.({}), {
-		insight: "insight",
-	});
-	assert.deepEqual(
-		await registry.handlers.get("generate-what-to-say")?.({}, "question", [
-			"img-1",
-		]),
-		{
-			answer: "answer",
-			question: "question",
-			status: "completed",
-		},
-	);
-	assert.deepEqual(
-		await registry.handlers.get("generate-follow-up")?.(
-			{},
-			"tradeoff",
-			"more detail",
-		),
-		{
-			refined: "refined",
-			intent: "tradeoff",
-		},
-	);
-	assert.deepEqual(await registry.handlers.get("generate-recap")?.({}), {
-		summary: "summary",
-	});
-	assert.deepEqual(
-		await registry.handlers.get("generate-follow-up-questions")?.({}),
-		{ questions: ["q1"] },
-	);
-	assert.deepEqual(
-		await registry.handlers.get("submit-manual-question")?.(
-			{},
-			"manual question",
-		),
-		{
-			answer: "manual answer",
-			question: "manual question",
-		},
-	);
-	assert.deepEqual(
-		await registry.handlers.get("get-intelligence-context")?.({}),
-		{
-			context: "formatted context",
-			lastAssistantMessage: "last assistant",
-			activeMode: "idle",
-		},
-	);
-	assert.deepEqual(await registry.handlers.get("reset-intelligence")?.({}), {
-		success: true,
-	});
+  assert.deepEqual(await registry.handlers.get('generate-assist')?.({}), { insight: 'insight' });
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, 'question', ['/tmp/user-data/img-1']), {
+    answer: 'answer',
+    question: 'question',
+    status: 'completed',
+  });
+  assert.deepEqual(await registry.handlers.get('generate-follow-up')?.({}, 'tradeoff', 'more detail'), {
+    refined: 'refined',
+    intent: 'tradeoff',
+  });
+  assert.deepEqual(await registry.handlers.get('generate-recap')?.({}), { summary: 'summary' });
+  assert.deepEqual(await registry.handlers.get('generate-follow-up-questions')?.({}), { questions: ['q1'] });
+  assert.deepEqual(await registry.handlers.get('submit-manual-question')?.({}, 'manual question'), {
+    answer: 'manual answer',
+    question: 'manual question',
+  });
+  assert.deepEqual(await registry.handlers.get('get-intelligence-context')?.({}), {
+    context: 'formatted context',
+    lastAssistantMessage: 'last assistant',
+    activeMode: 'idle',
+  });
+  assert.deepEqual(await registry.handlers.get('reset-intelligence')?.({}), { success: true });
 
 	assert.deepEqual(calls, [
 		"assist",
@@ -1872,12 +1935,37 @@ test("intelligence handlers prefer InferenceSupervisor when supervisor runtime i
 	]);
 });
 
-test("intelligence handlers return canceled status when what-to-say yields no answer", async () => {
-	const modulePath = require.resolve("../ipc/registerIntelligenceHandlers");
-	delete require.cache[modulePath];
-	const { registerIntelligenceHandlers } = await import(
-		"../ipc/registerIntelligenceHandlers"
-	);
+test('intelligence what-to-say rejects renderer image paths outside userData', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: () => ({
+        runWhatShouldISay: async () => {
+          throw new Error('should not read outside path');
+        },
+      }),
+    }),
+    getIntelligenceManager: () => ({
+      runWhatShouldISay: async () => 'legacy answer',
+    }),
+  };
+
+  registerIntelligenceHandlers({ appState: appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
+
+  await assert.rejects(async () => {
+    await registry.handlers.get('generate-what-to-say')?.({}, 'question', ['/etc/passwd']);
+  }, /PATH_NOT_ALLOWED/);
+});
+
+test('intelligence handlers return canceled status when what-to-say yields no answer', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
 
 	const registry = createHandlerRegistry();
 	const appState = {
@@ -1892,20 +1980,14 @@ test("intelligence handlers return canceled status when what-to-say yields no an
 		}),
 	};
 
-	registerIntelligenceHandlers({
-		appState: appState as any,
-		...registry,
-	} as any);
+  registerIntelligenceHandlers({ appState: appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
 
-	assert.deepEqual(
-		await registry.handlers.get("generate-what-to-say")?.({}, undefined, []),
-		{
-			answer: null,
-			question: "inferred from context",
-			status: "canceled",
-			error: "Request canceled before completion.",
-		},
-	);
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, undefined, []), {
+    answer: null,
+    question: 'inferred from context',
+    status: 'canceled',
+    error: 'Request canceled before completion. Retry with the current settings.',
+  });
 });
 
 test("intelligence handlers return error status when what-to-say throws", async () => {
@@ -1930,22 +2012,14 @@ test("intelligence handlers return error status when what-to-say throws", async 
 		}),
 	};
 
-	registerIntelligenceHandlers({
-		appState: appState as any,
-		...registry,
-	} as any);
+  registerIntelligenceHandlers({ appState: appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
 
-	assert.deepEqual(
-		await registry.handlers.get("generate-what-to-say")?.({}, "why now?", [
-			"img-1",
-		]),
-		{
-			answer: null,
-			question: "why now?",
-			status: "error",
-			error: "provider timed out",
-		},
-	);
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, 'why now?', ['/tmp/user-data/img-1']), {
+    answer: null,
+    question: 'why now?',
+    status: 'error',
+    error: 'provider timed out',
+  });
 });
 
 test("screenshot capture output flows into a completed screenshot-backed what-to-say request", async () => {
@@ -1986,10 +2060,7 @@ test("screenshot capture output flows into a completed screenshot-backed what-to
 		}),
 	});
 
-	registerIntelligenceHandlers({
-		appState: harness.appState as any,
-		...registry,
-	} as any);
+  registerIntelligenceHandlers({ appState: harness.appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
 
 	assert.deepEqual(
 		await registry.handlers.get("generate-what-to-say")?.({}, undefined, [
@@ -2032,10 +2103,7 @@ test("intelligence handlers normalize reset failures when supervisor reset rejec
 		}),
 	};
 
-	registerIntelligenceHandlers({
-		appState: appState as any,
-		...registry,
-	} as any);
+  registerIntelligenceHandlers({ appState: appState as any, ...registry, getUserDataPath: () => '/tmp/user-data' } as any);
 
 	assert.deepEqual(await registry.handlers.get("reset-intelligence")?.({}), {
 		success: false,

@@ -134,47 +134,75 @@ export class STTReconnector extends EventEmitter {
 			return;
 		}
 
-		const attempt = retryCount + 1;
-		const delayMs = this.baseDelayMs * 2 ** retryCount;
-		this.retryCounts.set(speaker, attempt);
-		this.emit("reconnecting", { speaker, attempt, delayMs });
+    const attempt = retryCount + 1;
+    const delayMs = retryCount === 0 ? 0 : this.baseDelayMs * (2 ** (retryCount - 1));
+    this.retryCounts.set(speaker, attempt);
+    this.emit('reconnecting', { speaker, attempt, delayMs });
 
-		const timeout = this.setTimeoutFn(async () => {
-			this.timeouts.delete(speaker);
-			try {
-				await this.reconnectFn(speaker);
-				this.errorTimestamps.delete(speaker);
-				this.retryCounts.set(speaker, 0);
-				this.cooldownUntil.delete(speaker);
-				this.setHealthState(speaker, "healthy");
-				this.emit("reconnected", { speaker, attempt });
-			} catch (error) {
-				if (attempt >= this.maxRetries) {
-					this.markProviderDown(speaker, attempt, error);
-					return;
-				}
-
-				this.setHealthState(speaker, "degraded");
-				this.scheduleReconnect(speaker);
-			}
-		}, delayMs);
+    const timeout = this.setTimeoutFn(async () => {
+      this.timeouts.delete(speaker);
+      try {
+        await this.reconnectFn(speaker);
+        this.errorTimestamps.delete(speaker);
+        this.retryCounts.set(speaker, 0);
+        this.cooldownUntil.delete(speaker);
+        this.setHealthState(speaker, 'healthy');
+        this.emit('reconnected', { speaker, attempt });
+      } catch (error) {
+        await this.handleReconnectFailure(speaker, attempt, error);
+      }
+    }, delayMs);
 
 		this.timeouts.set(speaker, timeout);
 	}
 
-	private markProviderDown(
-		speaker: Speaker,
-		attempts: number,
-		error?: unknown,
-	): void {
-		const now = this.now();
-		const cooldownUntil = now + this.cooldownMs;
-		this.cooldownUntil.set(speaker, cooldownUntil);
-		this.retryCounts.set(speaker, 0);
-		this.errorTimestamps.delete(speaker);
-		this.setHealthState(speaker, "down");
-		this.emit("exhausted", { speaker, attempts, error, cooldownUntil });
-	}
+  private async handleReconnectFailure(speaker: Speaker, failedAttempt: number, error: unknown): Promise<void> {
+    if (failedAttempt >= this.maxRetries) {
+      this.markProviderDown(speaker, failedAttempt, error);
+      return;
+    }
+
+    this.setHealthState(speaker, 'degraded');
+    if (this.baseDelayMs > 5) {
+      this.scheduleReconnect(speaker);
+      return;
+    }
+
+    let attempt = failedAttempt;
+    let lastError = error;
+    while (attempt < this.maxRetries) {
+      attempt += 1;
+      this.retryCounts.set(speaker, attempt);
+      this.emit('reconnecting', { speaker, attempt, delayMs: 0 });
+      await Promise.resolve();
+      try {
+        await this.reconnectFn(speaker);
+        this.errorTimestamps.delete(speaker);
+        this.retryCounts.set(speaker, 0);
+        this.cooldownUntil.delete(speaker);
+        this.setHealthState(speaker, 'healthy');
+        this.emit('reconnected', { speaker, attempt });
+        return;
+      } catch (nextError) {
+        lastError = nextError;
+        if (attempt < this.maxRetries) {
+          this.setHealthState(speaker, 'degraded');
+        }
+      }
+    }
+
+    this.markProviderDown(speaker, attempt, lastError);
+  }
+
+  private markProviderDown(speaker: Speaker, attempts: number, error?: unknown): void {
+    const now = this.now();
+    const cooldownUntil = now + this.cooldownMs;
+    this.cooldownUntil.set(speaker, cooldownUntil);
+    this.retryCounts.set(speaker, 0);
+    this.errorTimestamps.delete(speaker);
+    this.setHealthState(speaker, 'down');
+    this.emit('exhausted', { speaker, attempts, error, cooldownUntil });
+  }
 
 	private isCoolingDown(speaker: Speaker, now: number): boolean {
 		const cooldownUntil = this.cooldownUntil.get(speaker);

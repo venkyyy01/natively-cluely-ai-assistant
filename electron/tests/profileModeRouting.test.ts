@@ -13,14 +13,11 @@ type KnowledgeResult = {
 };
 
 type StreamCall = {
-	message: string;
-	context?: string;
-	prompt?: string;
-	options?: {
-		skipKnowledgeInterception?: boolean;
-		qualityTier?: "fast" | "standard" | "structured_reasoning";
-	};
-	startedAt: number;
+  message: string;
+  context?: string;
+  prompt?: string;
+  options?: { skipKnowledgeInterception?: boolean; qualityTier?: 'fast' | 'quality' | 'verify' };
+  startedAt: number;
 };
 
 class CapturingLatencyTracker extends AnswerLatencyTracker {
@@ -62,25 +59,16 @@ class FakeLLMHelper {
 		};
 	}
 
-	async *streamChat(
-		message: string,
-		_imagePaths?: string[],
-		context?: string,
-		prompt?: string,
-		options?: {
-			skipKnowledgeInterception?: boolean;
-			qualityTier?: "fast" | "standard" | "structured_reasoning";
-		},
-	): AsyncGenerator<string> {
-		this.calls.push({
-			message,
-			context,
-			prompt,
-			options,
-			startedAt: Date.now(),
-		});
-		yield this.answer;
-	}
+  async *streamChat(
+    message: string,
+    _imagePaths?: string[],
+    context?: string,
+    prompt?: string,
+    options?: { skipKnowledgeInterception?: boolean; qualityTier?: 'fast' | 'quality' | 'verify' },
+  ): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt, options, startedAt: Date.now() });
+    yield this.answer;
+  }
 }
 
 function addInterviewerTurn(

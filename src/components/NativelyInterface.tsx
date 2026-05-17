@@ -38,7 +38,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { getElectronAPI } from '../lib/electronApi';
+import { getElectronAPI, getOptionalElectronMethod } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
@@ -121,6 +121,17 @@ interface NativelyInterfaceProps {
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
     const electronAPI = getElectronAPI();
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const setModel = getOptionalElectronMethod('setModel');
+    const onModelChanged = getOptionalElectronMethod('onModelChanged');
+    const onModelFallback = getOptionalElectronMethod('onModelFallback');
+    const getUndetectable = getOptionalElectronMethod('getUndetectable');
+    const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+    const onToggleExpand = getOptionalElectronMethod('onToggleExpand');
+    const onSessionReset = getOptionalElectronMethod('onSessionReset');
+    const onPrivacyShieldChanged = getOptionalElectronMethod('onPrivacyShieldChanged');
+    const setOverlayBounds = getOptionalElectronMethod('setOverlayBounds');
+    const onGlobalShortcutAction = getOptionalElectronMethod('onGlobalShortcutAction');
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -151,6 +162,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const activeGeminiStreamingIdRef = useRef<string | null>(null);
     const activeRagStreamingIdRef = useRef<string | null>(null);
     const activeIntelligenceStreamingIdsRef = useRef<Record<string, string>>({});
+
+    // NAT-EXPLICIT-OVERRIDE: Forward reference to handleManualSubmit so
+    // handleWhatToSay (declared earlier) can delegate to it when the
+    // input box has typed text. The ref is populated below after
+    // handleManualSubmit is declared, so the forward call resolves at
+    // invocation time rather than at declaration time.
+    const handleManualSubmitRef = useRef<(() => Promise<void> | void) | null>(null);
 
     const nextMessageId = useCallback((prefix: string) => {
         const id = createMessageId(prefix, Date.now(), messageIdCounterRef.current);
@@ -209,13 +227,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     useEffect(() => {
         // Load the persisted default model (not the runtime model)
         // Each new meeting starts with the default from settings
-        if (window.electronAPI?.getDefaultModel) {
-            window.electronAPI.getDefaultModel()
+        if (getDefaultModel) {
+            getDefaultModel()
                 .then((result: any) => {
                     if (result && result.model) {
                         setCurrentModel(result.model);
                         // Also set the runtime model to the default
-                        window.electronAPI.setModel(result.model).catch(() => { });
+                        if (setModel) {
+                            void setModel(result.model).catch(() => { });
+                        }
                     }
                 })
                 .catch((err: any) => console.error("Failed to fetch default model:", err));
@@ -225,22 +245,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const handleModelSelect = (modelId: string) => {
         setCurrentModel(modelId);
         // Session-only: update runtime but don't persist as default
-        window.electronAPI.setModel(modelId)
-            .catch((err: any) => console.error("Failed to set model:", err));
+        if (setModel) {
+            void setModel(modelId)
+                .catch((err: any) => console.error("Failed to set model:", err));
+        }
     };
 
     // Listen for default model changes from Settings
     useEffect(() => {
-        if (!window.electronAPI?.onModelChanged) return;
-        const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
+        if (!onModelChanged) return;
+        const unsubscribe = onModelChanged((modelId: string) => {
             setCurrentModel(prev => prev === modelId ? prev : modelId);
         });
         return () => unsubscribe();
     }, []);
 
     useEffect(() => {
-        if (!window.electronAPI?.onModelFallback) return;
-        const unsubscribe = window.electronAPI.onModelFallback(({ previousModel, fallbackModel }) => {
+        if (!onModelFallback) return;
+        const unsubscribe = onModelFallback(({ previousModel, fallbackModel }) => {
             setCurrentModel(fallbackModel);
             setModelFallbackNotice(`Selected model unavailable. Switched from ${previousModel} to ${fallbackModel}.`);
         });
@@ -256,12 +278,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     // Global State Sync
     useEffect(() => {
         // Fetch initial state
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then(setIsUndetectable);
+        if (getUndetectable) {
+            getUndetectable().then(setIsUndetectable);
         }
 
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((state) => {
+        if (onUndetectableChanged) {
+            const unsubscribe = onUndetectableChanged((state) => {
                 setIsUndetectable(state);
             });
             return () => unsubscribe();
@@ -330,7 +352,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    const latestReadableMessage = messages.find(msg => msg.role === 'system') || null;
+    const latestReadableMessage = useMemo(() => messages.find(msg => msg.role === 'system') || null, [messages]);
 
     useHumanSpeedAutoScroll({
         enabled: isExpanded,
@@ -359,17 +381,28 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         if (isExpanded) {
             electronAPI.showWindow();
         } else {
-            // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
-            // Using setTimeout to ensure the render cycle completes first
-            // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => electronAPI.hideWindow(), 400);
+            electronAPI.hideWindow();
         }
     }, [electronAPI, isExpanded]);
 
+    useEffect(() => {
+        if (!onPrivacyShieldChanged) return;
+        return onPrivacyShieldChanged((state) => {
+            if (!state.active) return;
+            setMessages([]);
+            setInputValue('');
+            setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
+            setIsProcessing(false);
+        });
+    }, [onPrivacyShieldChanged]);
+
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
-        if (!window.electronAPI?.onToggleExpand) return;
-        const unsubscribe = window.electronAPI.onToggleExpand(() => {
+        if (!onToggleExpand) return;
+        const unsubscribe = onToggleExpand(() => {
             setIsExpanded(prev => !prev);
         });
         return () => unsubscribe();
@@ -377,8 +410,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Session Reset Listener - Clears UI when a NEW meeting starts
     useEffect(() => {
-        if (!window.electronAPI?.onSessionReset) return;
-        const unsubscribe = window.electronAPI.onSessionReset(() => {
+        if (!onSessionReset) return;
+        const unsubscribe = onSessionReset(() => {
             console.log('[NativelyInterface] Resetting session state...');
             setMessages([]);
             setInputValue('');
@@ -420,11 +453,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     };
 
     useEffect(() => {
-        localStorage.setItem('natively_overlay_width', String(panelWidth));
-        localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
-    }, [panelWidth, chatViewportHeight]);
-
-    useEffect(() => {
         const handlePointerMove = (event: MouseEvent) => {
             if (!resizeStartRef.current) return;
             const deltaX = event.clientX - resizeStartRef.current.x;
@@ -461,12 +489,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             setPanelWidth(nextWidth);
             setChatViewportHeight(nextHeight);
-            window.electronAPI?.setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            if (setOverlayBounds) {
+                void setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            }
         };
 
         const stopResize = () => {
             resizeStartRef.current = null;
             setIsResizing(false);
+            // Write to localStorage only when resize stops
+            localStorage.setItem('natively_overlay_width', String(panelWidth));
+            localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
         };
 
         window.addEventListener('mousemove', handlePointerMove);
@@ -893,8 +926,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (electronAPI.onScreenshotAttached) {
-            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        const onScreenshotAttached = getOptionalElectronMethod('onScreenshotAttached');
+        if (onScreenshotAttached) {
+            cleanups.push(onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
@@ -902,13 +936,28 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Quick Actions - Updated to use new Intelligence APIs
 
-    const handleCopy = (text: string) => {
+    const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
         analytics.trackCopyAnswer();
         // Optional: Trigger a small toast or state change for visual feedback
-    };
+    }, [analytics]);
 
-    const handleWhatToSay = async () => {
+    const handleWhatToSay = useCallback(async () => {
+        // NAT-EXPLICIT-OVERRIDE: When the user has typed something into
+        // the input box (with or without screenshots), treat that as an
+        // explicit request and route through the manual-submit pipeline
+        // (`streamGeminiChat`) which bypasses cooldown, anti-bombardment
+        // dedup, and the conscious-mode question-resolution gate. The
+        // user told us exactly what they want — process it, don't gate.
+        //
+        // `runWhatShouldISay` is reserved for the implicit "use the
+        // current transcript / queued screenshots, infer intent" path
+        // (Cmd+Enter with empty input box).
+        if (inputValue.trim().length > 0) {
+            handleManualSubmitRef.current?.();
+            return;
+        }
+
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('what_to_say');
@@ -944,6 +993,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         try {
             // Pass imagePath if attached
             const result = await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            if (result?.status === 'canceled') {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
             setMessages(prev => updateOrPrependMessageById(
                 prev,
                 assistantMessageId,
@@ -977,6 +1030,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 }
             ));
         } catch (err) {
+            if (String(err).includes('CONTAINMENT_ACTIVE')) {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
             setMessages(prev => updateOrPrependMessageById(
                 prev,
                 assistantMessageId,
@@ -1001,9 +1058,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             );
             setIsProcessing(false);
         }
-    };
+    }, [inputValue, attachedContext, setIsExpanded, setIsProcessing, setMessages, setAttachedContext, analytics]);
 
-    const handleFollowUp = async (intent: string = 'rephrase') => {
+    const handleFollowUp = useCallback(async (intent: string = 'rephrase') => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
@@ -1049,9 +1106,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleRecap = async () => {
+    const handleRecap = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
@@ -1096,9 +1153,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleFollowUpQuestions = async () => {
+    const handleFollowUpQuestions = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
@@ -1143,103 +1200,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
 
     // Setup Streaming Listeners
     useEffect(() => {
         const cleanups: (() => void)[] = [];
-
-        // Stream Token
-        cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setMessages(prev => updateMessageById(
-                prev,
-                targetId,
-                message => {
-                    const nextText = message.text + token;
-                    return {
-                        ...message,
-                        text: nextText,
-                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
-                    };
-                }
-            ));
-        }));
-
-        // Stream Done
-        cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setIsProcessing(false);
-
-            // Calculate latency if we have a start time
-            let latency = 0;
-            if (requestStartTimeRef.current) {
-                latency = Date.now() - requestStartTimeRef.current;
-                requestStartTimeRef.current = null;
-            }
-
-            // Track Usage
-            analytics.trackModelUsed({
-                model_name: currentModel,
-                provider_type: detectProviderType(currentModel),
-                latency_ms: latency
-            });
-
-            setMessages(prev => updateMessageById(
-                prev,
-                targetId,
-                message => ({
-                    ...message,
-                    isStreaming: false
-                })
-            ));
-
-            activeGeminiStreamingIdRef.current = null;
-            if (activeRagStreamingIdRef.current === targetId) {
-                activeRagStreamingIdRef.current = null;
-            }
-        }));
-
-        // Stream Error
-        cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setIsProcessing(false);
-            requestStartTimeRef.current = null; // Clear timer on error
-
-            setMessages(prev => updateOrPrependMessageById(
-                prev,
-                targetId,
-                message => ({
-                    ...message,
-                    isStreaming: false,
-                    text: message.text + `\n\n[Error: ${error}]`
-                }),
-                {
-                    id: nextMessageId('system'),
-                    role: 'system',
-                    text: `❌ Error: ${error}`,
-                    createdAt: Date.now()
-                }
-            ));
-
-            activeGeminiStreamingIdRef.current = null;
-            if (targetId && activeRagStreamingIdRef.current === targetId) {
-                activeRagStreamingIdRef.current = null;
-            }
-        }));
 
         // JIT RAG Stream listeners (for live meeting RAG responses)
         if (window.electronAPI.onRAGStreamChunk) {
@@ -1326,6 +1292,85 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => cleanups.forEach(fn => fn());
     }, [currentModel, nextMessageId]); // Ensure tracking captures correct model
 
+    // NAT-036: per-request Gemini stream listener setup
+    const subscribeGeminiStream = (requestId: string, assistantMessageId: string): (() => void) => {
+        const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => {
+                    const nextText = message.text + token;
+                    return {
+                        ...message,
+                        text: nextText,
+                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
+                    };
+                }
+            ));
+        });
+
+        const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+            setIsProcessing(false);
+
+            let latency = 0;
+            if (requestStartTimeRef.current) {
+                latency = Date.now() - requestStartTimeRef.current;
+                requestStartTimeRef.current = null;
+            }
+
+            analytics.trackModelUsed({
+                model_name: currentModel,
+                provider_type: detectProviderType(currentModel),
+                latency_ms: latency
+            });
+
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false
+                })
+            ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+        });
+
+        const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
+            setIsProcessing(false);
+            requestStartTimeRef.current = null;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text + `\n\n[Error: ${error}]`
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `❌ Error: ${error}`,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+        });
+
+        return () => {
+            tokenCleanup();
+            doneCleanup();
+            errorCleanup();
+        };
+    };
 
     const handleAnswerNow = async () => {
         if (manualFinalizeInFlightRef.current) {
@@ -1439,9 +1484,15 @@ Instructions:
 Provide only the answer, nothing else.`;
                     }
 
-                    // Call Streaming API: message = question, context = instructions
-                    requestStartTimeRef.current = Date.now();
-                    await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+// Call Streaming API: message = question, context = instructions
+      const answerRequestId = crypto.randomUUID();
+      const streamCleanup = subscribeGeminiStream(answerRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true, requestId: answerRequestId });
+      } finally {
+        streamCleanup();
+      }
 
                 } catch (err) {
                     // Initial invocation failing (e.g. IPC error before stream starts)
@@ -1543,13 +1594,20 @@ Provide only the answer, nothing else.`;
                 }
             }
 
-            // Pass imagePath if attached, AND conversation context
-            requestStartTimeRef.current = Date.now();
-            await window.electronAPI.streamGeminiChat(
-                userText || 'Analyze this screenshot',
-                currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
-                conversationContext // Pass context so "answer this" works
-            );
+// Pass imagePath if attached, AND conversation context
+      const chatRequestId = crypto.randomUUID();
+      const chatStreamCleanup = subscribeGeminiStream(chatRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(
+          userText || 'Analyze this screenshot',
+          currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
+          conversationContext,
+          { requestId: chatRequestId }
+        );
+      } finally {
+        chatStreamCleanup();
+      }
         } catch (err) {
             setIsProcessing(false);
             if (activeGeminiStreamingIdRef.current === assistantMessageId) {
@@ -1576,6 +1634,12 @@ Provide only the answer, nothing else.`;
         }
     };
 
+    // NAT-EXPLICIT-OVERRIDE: Keep the forward-declared ref pointing at
+    // the latest handleManualSubmit closure on every render so
+    // handleWhatToSay can call into it without a circular declaration
+    // dependency.
+    handleManualSubmitRef.current = handleManualSubmit;
+
     const clearChat = () => {
         setMessages([]);
     };
@@ -1583,7 +1647,8 @@ Provide only the answer, nothing else.`;
 
 
 
-    const renderMessageText = (msg: Message) => {
+    // 🚀 PERFORMANCE OPTIMIZATION: Memoize expensive message rendering to prevent unnecessary re-renders
+    const renderMessageText = useCallback((msg: Message) => {
         if (msg.intent === 'what_to_answer') {
             const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
             if (consciousModeAnswer) {
@@ -1690,9 +1755,12 @@ Provide only the answer, nothing else.`;
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-cyan-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-cyan-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-cyan-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-cyan-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1701,19 +1769,46 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'recap') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-indigo-300 font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-emerald-300 font-semibold text-xs uppercase tracking-wide">
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Recap</span>
                     </div>
                     <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-indigo-100" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'follow_up') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-yellow-300 font-semibold text-xs uppercase tracking-wide">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Follow-Up</span>
+                    </div>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
+                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-yellow-100" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-yellow-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-yellow-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-yellow-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1722,17 +1817,92 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'follow_up_questions') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-[#FFD60A] font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
                         <HelpCircle className="w-3.5 h-3.5" />
-                        <span>Follow-Up Questions</span>
+                        <span>Questions</span>
                     </div>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72]">
+                        {/* Extract bullet point list for questions */}
+                        {msg.text.split('\n').filter(line => line.trim().startsWith('•')).map((question, i) => (
+                            <div 
+                                key={i}
+                                className="mb-3 last:mb-0 p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 cursor-pointer transition-colors"
+                                onClick={() => {
+                                    const questionText = question.replace(/^•\s*/, '');
+                                    // Handle question click
+                                    console.log('Question clicked:', questionText);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed">{question.replace(/^•\s*/, '')}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        // Follow-up questions as clickable pills
+        if (msg.intent === 'follow_up_questions' && msg.role === 'system') {
+            // Extract individual questions
+            const questions = msg.text.split('\n').filter(line => line.trim().startsWith('•')).map(q => q.replace(/^•\s*/, ''));
+
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>Follow-up Questions</span>
+                    </div>
+                    <div className="space-y-2">
+                        {questions.map((question, i) => (
+                            <button
+                                key={i}
+                                className="w-full text-left p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 transition-colors group"
+                                onClick={() => {
+                                    // Handle question click - trigger what to say with this question
+                                    console.log('Follow-up question clicked:', question);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed group-hover:text-white">{question}</span>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'answer_now') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-blue-300 font-semibold text-xs uppercase tracking-wide">
+                        <ArrowUp className="w-3.5 h-3.5" />
+                        <span>Answer Now</span>
+                    </div>
+
                     <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-[#FFF9C4]" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                                strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                                em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
+                                ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
+                                ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
+                                li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                                h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                                code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                                blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
+                                a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                            }}
+                        >
                             {msg.text}
                         </ReactMarkdown>
                     </div>
@@ -1740,106 +1910,24 @@ Provide only the answer, nothing else.`;
             );
         }
 
-        if (msg.intent === 'what_to_answer') {
-            // Split text by code blocks (Handle unclosed blocks at EOF)
-            const parts = msg.text.split(/(```[\s\S]*?(?:```|$))/g);
-
-            return (
-                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-emerald-400 font-semibold text-xs uppercase tracking-wide">
-                        <span>Say this</span>
-                    </div>
-                    <div className="text-slate-100 text-[16.5px] leading-[1.72]">
-                        {parts.map((part, i) => {
-                            if (part.startsWith('```')) {
-                                // Robust matching: handles unclosed blocks for streaming (```...$)
-                                const match = part.match(/```(\w*)\s+([\s\S]*?)(?:```|$)/);
-
-                                // Fallback logic: if it starts with ticks, treat as code (even if unclosed)
-                                if (match || part.startsWith('```')) {
-                                    const lang = (match && match[1]) ? match[1] : 'python';
-                                    let code = '';
-
-                                    if (match && match[2]) {
-                                        code = match[2].trim();
-                                    } else {
-                                        // Manual strip if regex failed
-                                        code = part.replace(/^```\w*\s*/, '').replace(/```$/, '').trim();
-                                    }
-
-                                    return (
-                                        <div key={i} className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
-                                            {/* Minimalist Apple Header */}
-                                            <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                                <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
-                                                    {lang || 'CODE'}
-                                                </span>
-                                            </div>
-
-                                            <div className="bg-transparent">
-                                                <SyntaxHighlighter
-                                                    language={lang}
-                                                    style={vscDarkPlus}
-                                                    customStyle={{
-                                                        margin: 0,
-                                                        borderRadius: 0,
-                                                        fontSize: '13px',
-                                                        lineHeight: '1.6',
-                                                        background: 'transparent',
-                                                        padding: '16px',
-                                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                                    }}
-                                                    wrapLongLines={true}
-                                                    showLineNumbers={true}
-                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
-                                                >
-                                                    {code}
-                                                </SyntaxHighlighter>
-                                            </div>
-                                        </div>
-                                    );
-                                }
-                            }
-                            // Regular text - Render Markdown
-                            return (
-                                <div key={i} className="markdown-content">
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeKatex]}
-                                        components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
-                                            em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
-                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
-                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
-                                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                                        }}
-                                    >
-                                        {part}
-                                    </ReactMarkdown>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
-        }
-
-        // Standard Text Messages (e.g. from User or Interviewer)
-        // We still want basic markdown support here too
+        // Regular messages with Markdown support
         return (
-            <div className="markdown-content">
+            <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
-                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                        strong: ({ node, ...props }: any) => <strong className="font-bold opacity-100" {...props} />,
-                        em: ({ node, ...props }: any) => <em className="italic opacity-90" {...props} />,
+                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                        strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                        em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
                         ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
                         ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
                         li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
+                        h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                        code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                        blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
                         a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
                     }}
                 >
@@ -1847,7 +1935,7 @@ Provide only the answer, nothing else.`;
                 </ReactMarkdown>
             </div>
         );
-    };
+    }, []); // No dependencies - this function is pure and uses only its msg parameter
 
 
     // Keyboard Shortcuts
@@ -2041,11 +2129,14 @@ Provide only the answer, nothing else.`;
     }, [isShortcutPressed]);
 
     useEffect(() => {
-        const unsubscribe = window.electronAPI?.onGlobalShortcutAction?.((actionId) => {
+        const unsubscribe = onGlobalShortcutAction?.((actionId) => {
             if (actionId === 'chat:scrollUp') {
                 scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
             } else if (actionId === 'chat:scrollDown') {
                 scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+            } else if (actionId === 'general:process-screenshots') {
+                // STEALTH: Cmd+Enter is now a global shortcut — handle it here
+                handlersRef.current.handleWhatToSay();
             }
         });
 

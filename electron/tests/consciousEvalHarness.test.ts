@@ -11,9 +11,12 @@ test("Conscious eval harness runs default scenarios and produces a summary", asy
 		verifier: new ConsciousVerifier(),
 	});
 
-	assert.equal(summary.total, results.length);
-	assert.ok(summary.total > 0);
-	assert.equal(summary.failed, 0);
+  assert.equal(summary.total, results.length);
+  assert.ok(summary.total > 0);
+  assert.equal(summary.failed, 0);
+  assert.ok(summary.byFamily.system_design.total > 0);
+  assert.ok(summary.byFamily.behavioral.total > 0);
+  assert.ok(summary.byFamily.provenance.total > 0);
 });
 
 test("Conscious replay harness reconstructs route, context, verifier, and fallback trace", async () => {
@@ -21,13 +24,12 @@ test("Conscious replay harness reconstructs route, context, verifier, and fallba
 		verifier: new ConsciousVerifier(),
 	});
 
-	assert.equal(summary.total, results.length);
-	assert.equal(summary.failed, 0);
-	assert.ok(results[0].trace.selectedContextItemIds.length > 0);
-	assert.deepEqual(results[0].trace.route, {
-		qualifies: true,
-		threadAction: "continue",
-	});
-	assert.equal(results[0].trace.verifierVerdict.ok, true);
-	assert.equal(results[0].trace.fallbackReason, undefined);
+  assert.equal(summary.total, results.length);
+  assert.equal(summary.failed, 0);
+  assert.ok(summary.byFamily.system_design_continuation.total > 0);
+  assert.ok(summary.byFamily.topic_shift.total > 0);
+  assert.ok(results[0].trace.selectedContextItemIds.length > 0);
+  assert.deepEqual(results[0].trace.route, { qualifies: true, threadAction: 'continue' });
+  assert.equal(results[0].trace.verifierVerdict.ok, true);
+  assert.equal(results[0].trace.fallbackReason, undefined);
 });

@@ -105,18 +105,10 @@ test("cleanup removes stale packaged app directories and archive files", () => {
 	assert.equal(fs.existsSync(path.join(tempDir, "Natively.zip")), false);
 });
 
-test("cleanup preserves the tracked macOS virtual display helper source path", () => {
-	const tempDir = fs.mkdtempSync(
-		path.join(os.tmpdir(), "build-install-helper-"),
-	);
-	const releaseDir = path.join(tempDir, "release");
-	const helperPath = path.join(
-		tempDir,
-		"assets",
-		"bin",
-		"macos",
-		"stealth-virtual-display-helper",
-	);
+test('cleanup preserves the tracked macOS virtual display helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'system-services-helper');
 
 	touch(helperPath, 1_000);
 
@@ -127,23 +119,30 @@ test("cleanup preserves the tracked macOS virtual display helper source path", (
 	assert.equal(fs.existsSync(helperPath), true);
 });
 
-test("cleanup preserves the tracked macOS full stealth XPC bundle source path", () => {
-	const tempDir = fs.mkdtempSync(
-		path.join(os.tmpdir(), "build-install-full-stealth-helper-"),
-	);
-	const releaseDir = path.join(tempDir, "release");
-	const helperBundlePath = path.join(
-		tempDir,
-		"assets",
-		"xpcservices",
-		"macos-full-stealth-helper.xpc",
-	);
-	const helperBinaryPath = path.join(
-		helperBundlePath,
-		"Contents",
-		"MacOS",
-		"macos-full-stealth-helper",
-	);
+test('virtual display helper resolution prefers the renamed helper and falls back to the legacy name', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-resolution-'));
+  const helperDir = path.join(tempDir, 'assets', 'bin', 'macos');
+  const renamedHelperPath = path.join(helperDir, 'system-services-helper');
+  const legacyHelperPath = path.join(helperDir, 'stealth-virtual-display-helper');
+
+  touch(legacyHelperPath, 1_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    legacyHelperPath,
+  );
+
+  touch(renamedHelperPath, 2_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    renamedHelperPath,
+  );
+});
+
+test('cleanup preserves the tracked macOS full stealth XPC bundle source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-full-stealth-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperBundlePath = path.join(tempDir, 'assets', 'xpcservices', 'macos-full-stealth-helper.xpc');
+  const helperBinaryPath = path.join(helperBundlePath, 'Contents', 'MacOS', 'macos-full-stealth-helper');
 
 	touch(helperBinaryPath, 1_000);
 
@@ -155,19 +154,26 @@ test("cleanup preserves the tracked macOS full stealth XPC bundle source path", 
 	assert.equal(fs.existsSync(helperBinaryPath), true);
 });
 
-test("cleanup treats external cache cleanup as best effort", () => {
-	const tempDir = fs.mkdtempSync(
-		path.join(os.tmpdir(), "build-install-optional-cache-"),
-	);
-	const releaseDir = path.join(tempDir, "release");
-	const homeDir = path.join(tempDir, "home");
-	const builderCacheDir = path.join(
-		homeDir,
-		"Library",
-		"Caches",
-		"electron-builder",
-	);
-	const cachesDir = path.join(homeDir, "Library", "Caches");
+test('cleanup preserves the tracked foundation intent helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-foundation-intent-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'foundation-intent-helper');
+
+  touch(helperPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperPath), true);
+});
+
+test('cleanup treats external cache cleanup as best effort', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-optional-cache-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const homeDir = path.join(tempDir, 'home');
+  const builderCacheDir = path.join(homeDir, 'Library', 'Caches', 'electron-builder');
+  const cachesDir = path.join(homeDir, 'Library', 'Caches');
 
 	touch(path.join(releaseDir, "mac", "Natively.app"), 1_000);
 	touch(path.join(builderCacheDir, "cache-file"), 1_000);

@@ -413,10 +413,187 @@ test("NativeStealthBridge fails arm when helper control-plane is blocked", async
 	assert.equal(bridge.getActiveSessionId(), null);
 });
 
-test("NativeStealthBridge attempts one restart after helper disconnect without emitting a terminal disconnect event when recovery succeeds", async () => {
-	const calls: string[] = [];
-	const disconnects: string[] = [];
-	let healthCalls = 0;
+test('NativeStealthBridge tears down a created session when surface attachment fails', async () => {
+  const calls: string[] = [];
+  const bridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-attach-fail',
+    clientFactory: () => ({
+      async createProtectedSession(request) {
+        calls.push(`create:${request.sessionId}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: { sessionId: request.sessionId, state: 'creating' },
+        };
+      },
+      async attachSurface(request) {
+        calls.push(`attach:${request.surfaceId}`);
+        return {
+          outcome: 'blocked',
+          failClosed: true,
+          presentationAllowed: false,
+          blockers: [{ code: 'surface-not-attached', message: 'attach failed', retryable: false }],
+          data: {
+            sessionId: request.sessionId,
+            state: 'blocked',
+            surfaceAttached: false,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [{ code: 'surface-not-attached', message: 'attach failed', retryable: false }],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async present(request) {
+        calls.push(`present:${request.activate}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: request.activate,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: request.activate ? 'presenting' : 'attached',
+            surfaceAttached: false,
+            presenting: request.activate,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async getHealth() {
+        throw new Error('unreachable');
+      },
+      async teardownSession(sessionId) {
+        calls.push(`teardown:${sessionId}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: { released: true },
+        };
+      },
+      dispose() {},
+    }),
+  });
+
+  await assert.rejects(() => bridge.arm(), /attach-surface failed/);
+  assert.equal(bridge.getActiveSessionId(), null);
+  assert.deepEqual(calls, [
+    'create:session-attach-fail',
+    'attach:surface-session-attach-fail',
+    'present:false',
+    'teardown:session-attach-fail',
+  ]);
+});
+
+test('NativeStealthBridge deactivates and tears down when presenter activation is rejected', async () => {
+  const calls: string[] = [];
+  const bridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-present-fail',
+    clientFactory: () => ({
+      async createProtectedSession(request) {
+        calls.push(`create:${request.sessionId}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: { sessionId: request.sessionId, state: 'creating' },
+        };
+      },
+      async attachSurface(request) {
+        calls.push(`attach:${request.surfaceId}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: 'attached',
+            surfaceAttached: true,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async present(request) {
+        calls.push(`present:${request.activate}`);
+        if (request.activate) {
+          return {
+            outcome: 'blocked',
+            failClosed: true,
+            presentationAllowed: false,
+            blockers: [{ code: 'native-presenter-unavailable', message: 'present failed', retryable: false }],
+            data: {
+              sessionId: request.sessionId,
+              state: 'blocked',
+              surfaceAttached: true,
+              presenting: false,
+              recoveryPending: false,
+              blockers: [{ code: 'native-presenter-unavailable', message: 'present failed', retryable: false }],
+              lastTransitionAt: new Date(0).toISOString(),
+            },
+          };
+        }
+
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: 'attached',
+            surfaceAttached: true,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async getHealth() {
+        throw new Error('unreachable');
+      },
+      async teardownSession(sessionId) {
+        calls.push(`teardown:${sessionId}`);
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: { released: true },
+        };
+      },
+      dispose() {},
+    }),
+  });
+
+  await assert.rejects(() => bridge.arm(), /present failed/);
+  assert.equal(bridge.getActiveSessionId(), null);
+  assert.deepEqual(calls, [
+    'create:session-present-fail',
+    'attach:surface-session-present-fail',
+    'present:true',
+    'present:false',
+    'teardown:session-present-fail',
+  ]);
+});
+
+test('NativeStealthBridge attempts one restart after helper disconnect without emitting a terminal disconnect event when recovery succeeds', async () => {
+  const calls: string[] = [];
+  const disconnects: string[] = [];
+  let healthCalls = 0;
 
 	const bridge = new NativeStealthBridge({
 		helperPathResolver: () => "/tmp/helper",

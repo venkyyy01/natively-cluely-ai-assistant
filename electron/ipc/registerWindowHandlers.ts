@@ -9,21 +9,18 @@ type RegisterWindowHandlersDeps = {
 };
 
 type WindowFacadeLike = {
-	updateContentDimensions: (
-		senderWebContentsId: number,
-		width: number,
-		height: number,
-	) => void;
-	setWindowMode: (mode: "launcher" | "overlay") => void;
-	setOverlayClickthrough: (enabled: boolean) => void;
-	toggleMainWindow: () => void;
-	showMainWindow: () => void;
-	hideMainWindow: () => void;
-	moveWindowLeft: () => void;
-	moveWindowRight: () => void;
-	moveWindowUp: () => void;
-	moveWindowDown: () => void;
-	centerAndShowWindow: () => void;
+  updateContentDimensions: (senderWebContentsId: number, width: number, height: number) => void;
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => void;
+  setWindowMode: (mode: 'launcher' | 'overlay') => void;
+  setOverlayClickthrough: (enabled: boolean) => void;
+  toggleMainWindow: () => void;
+  showMainWindow: () => void;
+  hideMainWindow: () => void;
+  moveWindowLeft: () => void;
+  moveWindowRight: () => void;
+  moveWindowUp: () => void;
+  moveWindowDown: () => void;
+  centerAndShowWindow: () => void;
 };
 
 const ok = <T>(data: T) => ({ success: true as const, data });
@@ -94,22 +91,42 @@ export function registerWindowHandlers({
 		},
 	);
 
-	safeHandleValidated(
-		"set-window-mode",
-		(args) =>
-			[
-				parseIpcInput(ipcSchemas.windowMode, args[0], "set-window-mode"),
-			] as const,
-		async (_event, mode) => {
-			const windowFacade = getWindowFacade(appState);
-			if (windowFacade) {
-				windowFacade.setWindowMode(mode);
-			} else {
-				appState.getWindowHelper().setWindowMode(mode);
-			}
-			return { success: true };
-		},
-	);
+  safeHandleValidated(
+    'set-overlay-bounds',
+    (args) => [parseIpcInput(ipcSchemas.overlayBounds, args[0], 'set-overlay-bounds')] as const,
+    async (_event, bounds) => {
+      if (typeof bounds.width !== 'number' || typeof bounds.height !== 'number') {
+        throw new Error('Invalid IPC payload for set-overlay-bounds: width and height are required');
+      }
+      const overlayBounds = {
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+      };
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setOverlayBounds(overlayBounds);
+      } else {
+        appState.getWindowHelper().setOverlayBounds(overlayBounds);
+      }
+      return ok(null);
+    },
+  );
+
+  safeHandleValidated(
+    'set-window-mode',
+    (args) => [parseIpcInput(ipcSchemas.windowMode, args[0], 'set-window-mode')] as const,
+    async (_event, mode) => {
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setWindowMode(mode);
+      } else {
+        appState.getWindowHelper().setWindowMode(mode);
+      }
+      return { success: true };
+    },
+  );
 
 	safeHandleValidated(
 		"set-overlay-clickthrough",
@@ -132,15 +149,70 @@ export function registerWindowHandlers({
 		},
 	);
 
-	safeHandle("toggle-window", async () => {
-		const windowFacade = getWindowFacade(appState);
-		if (windowFacade) {
-			windowFacade.toggleMainWindow();
-		} else {
-			appState.toggleMainWindow();
-		}
-		return ok(null);
-	});
+  safeHandleValidated(
+    'set-overlay-interactive',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-interactive')] as const,
+    async (_event, enabled) => {
+      // BLUR-PROOF: routed straight to the WindowHelper. The renderer flips
+      // this on input focus/blur so the overlay only takes native foreground
+      // when the user is actively typing. Default state stays non-activating.
+      appState.getWindowHelper().setOverlayInteractive(enabled);
+      return ok({ enabled });
+    },
+  );
+
+  safeHandleValidated(
+    'set-cursor-hook',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-cursor-hook')] as const,
+    async (_event, enabled) => {
+      // CURSOR-FREEZE: enable/disable the platform cursor freeze hook
+      // (CGEventTap on macOS, WH_MOUSE_LL on Windows). Returns whether
+      // the hook is now active so the renderer can show a permission-
+      // needed UI when Accessibility is denied. Persists the user's
+      // choice so the next launch boots in the same state.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(enabled);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { SettingsManager } = require('../services/SettingsManager');
+        SettingsManager.getInstance().set('cursorHookEnabled', enabled);
+      } catch (err) {
+        console.warn('[ipc] failed to persist cursorHookEnabled:', err);
+      }
+      // Broadcast the new status to all renderers so the overlay's
+      // SyntheticCursor and the Settings UI both pick up the change.
+      const status = { enabled, installed };
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const electron = require('electron');
+        for (const win of electron.BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('cursor-hook-status', status);
+          }
+        }
+      } catch (err) {
+        console.warn('[ipc] failed to broadcast cursor-hook-status:', err);
+      }
+      return ok(status);
+    },
+  );
+
+  safeHandle('get-cursor-hook-status', async () => {
+    const helper = appState.getWindowHelper();
+    return ok({
+      enabled: helper.isCursorHookRequested(),
+      installed: helper.isCursorHookEnabled(),
+    });
+  });
+
+  safeHandle('toggle-window', async () => {
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.toggleMainWindow();
+    } else {
+      appState.toggleMainWindow();
+    }
+    return ok(null);
+  });
 
 	safeHandle("show-window", async () => {
 		const windowFacade = getWindowFacade(appState);

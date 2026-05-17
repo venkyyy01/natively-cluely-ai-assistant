@@ -36,7 +36,9 @@ export interface TranscriptTextEntry {
 }
 
 export interface GeminiChatOptions {
-	skipSystemPrompt?: boolean;
+  skipSystemPrompt?: boolean;
+  qualityTier?: 'fast' | 'quality' | 'verify';
+  requestId?: string;
 }
 
 export interface SettingsWindowCoords {

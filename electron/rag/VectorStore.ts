@@ -26,20 +26,14 @@ export interface ScoredChunk extends StoredChunk {
  * Native sqlite-vec queries are offloaded to a worker thread to avoid blocking the main thread.
  */
 export class VectorStore {
-	private db: Database.Database;
-	private dbPath: string;
-	private extPath: string;
-	private useNativeVec: boolean;
-	private worker: Worker | null = null;
-	private requestId = 0;
-	private pendingRequests = new Map<
-		number,
-		{
-			resolve: (v: any) => void;
-			reject: (e: any) => void;
-			timer: ReturnType<typeof setTimeout>;
-		}
-	>();
+    private db: Database.Database;
+    private dbPath: string;
+    private extPath: string;
+    private useNativeVec: boolean;
+    private worker: Worker | null = null;
+    private requestId = 0;
+    private pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; timer: ReturnType<typeof setTimeout> }>();
+    private destroyed = false;
 
 	private static readonly WORKER_TIMEOUT_MS = 30_000; // 30s deadman switch
 
@@ -110,18 +104,18 @@ export class VectorStore {
 		this.pendingRequests.clear();
 	}
 
-	/**
-	 * Send a message to the worker with Transferable buffers.
-	 * Returns a Promise with a timeout deadman switch.
-	 */
-	private postToWorker<T>(
-		message: any,
-		transferList: ArrayBuffer[] = [],
-	): Promise<T> {
-		// Safe requestId wrap-around
-		this.requestId = (this.requestId + 1) % Number.MAX_SAFE_INTEGER;
-		const id = this.requestId;
-		message.requestId = id;
+    /**
+     * Send a message to the worker with Transferable buffers.
+     * Returns a Promise with a timeout deadman switch.
+     */
+    private postToWorker<T>(message: any, transferList: ArrayBuffer[] = []): Promise<T> {
+        if (this.destroyed) {
+            return Promise.reject(new Error('[VectorStore] destroyed; cannot dispatch worker request'));
+        }
+        // Safe requestId wrap-around
+        this.requestId = (this.requestId + 1) % Number.MAX_SAFE_INTEGER;
+        const id = this.requestId;
+        message.requestId = id;
 
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -138,16 +132,27 @@ export class VectorStore {
 		});
 	}
 
-	/**
-	 * Terminate the worker thread. Call this when the VectorStore is no longer needed.
-	 */
-	async destroy(): Promise<void> {
-		if (this.worker) {
-			await this.worker.terminate();
-			this.worker = null;
-		}
-		this.rejectAllPending(new Error("VectorStore destroyed"));
-	}
+    /**
+     * Terminate the worker thread. Call this when the VectorStore is no longer needed.
+     * Race-safe: sets `destroyed` synchronously so concurrent postToWorker calls
+     * fail fast rather than dispatching to a dying worker or lazily spawning a
+     * fresh one mid-teardown.
+     */
+    async destroy(): Promise<void> {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        const worker = this.worker;
+        this.worker = null;
+        // Reject pending FIRST so callers stop awaiting before terminate races them.
+        this.rejectAllPending(new Error('VectorStore destroyed'));
+        if (worker) {
+            try {
+                await worker.terminate();
+            } catch (err) {
+                console.warn('[VectorStore] worker.terminate() error (swallowed):', err);
+            }
+        }
+    }
 
 	/**
 	 * Detect if sqlite-vec is available (per-dimension vec0 tables must exist)

@@ -94,26 +94,27 @@ test("mountStealthShell hides loading indicator after the first frame", () => {
 		},
 	});
 
-	try {
-		mountStealthShell(
-			{
-				onFrame(callback) {
-					onFrame = callback;
-					return () => {};
-				},
-				sendInputEvent() {},
-				notifyReady() {
-					notifiedReady = true;
-				},
-				notifyHeartbeat() {
-					heartbeatCount += 1;
-				},
-			},
-			{
-				getElementById(id: string) {
-					if (id === "stealth-shell-canvas") {
-						return canvas as unknown as HTMLElement;
-					}
+  try {
+    mountStealthShell(
+      {
+        onFrame(callback) {
+          onFrame = callback;
+          return () => {};
+        },
+        sendInputEvent() {},
+        notifyReady() {
+          notifiedReady = true;
+        },
+        notifyHeartbeat() {
+          heartbeatCount += 1;
+        },
+        sendShortcutAction() {},
+      },
+      {
+        getElementById(id: string) {
+          if (id === 'stealth-shell-canvas') {
+            return canvas as unknown as HTMLElement;
+          }
 
 					if (id === "loading-indicator") {
 						return loadingIndicator as unknown as HTMLElement;

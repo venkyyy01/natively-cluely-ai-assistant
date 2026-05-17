@@ -1,10 +1,8 @@
-import { SpeechClient } from "@google-cloud/speech";
-import { EventEmitter } from "events";
-import * as path from "path";
-import {
-	type EnglishVariant,
-	RECOGNITION_LANGUAGES,
-} from "../config/languages";
+import { SpeechClient } from '@google-cloud/speech';
+import { EventEmitter } from 'events';
+import * as path from 'path';
+import { RECOGNITION_LANGUAGES, EnglishVariant } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 /**
  * GoogleSTT
@@ -16,10 +14,11 @@ import {
  * - Parses intermediate and final results.
  */
 export class GoogleSTT extends EventEmitter {
-	private client: SpeechClient;
-	private stream: any = null; // Stream type is complex in google-cloud libs
-	private isStreaming = false;
-	private isActive = false;
+    private static readonly PROACTIVE_RESTART_MS = 270_000;
+    private client: SpeechClient;
+    private stream: any = null; // Stream type is complex in google-cloud libs
+    private isStreaming = false;
+    private isActive = false;
 
 	// Config
 	private encoding = "LINEAR16" as const;
@@ -138,9 +137,10 @@ export class GoogleSTT extends EventEmitter {
 				this.start();
 			}
 
-			this.pendingLanguageChange = undefined;
-		}, 250);
-	}
+    public start(): void {
+        if (this.isActive) return;
+        this.isActive = true;
+        this.dropMetric.start(); // NAT-021
 
 	public start(): void {
 		if (this.isActive) return;
@@ -150,8 +150,17 @@ export class GoogleSTT extends EventEmitter {
 		this.startStream();
 	}
 
-	public stop(): void {
-		if (!this.isActive) return;
+        console.log('[GoogleSTT] Stopping stream...');
+        this.isActive = false;
+        this.isStreaming = false;
+        this.clearProactiveRestartTimer();
+        if (this.stream) {
+            this.stream.end();
+            this.stream.destroy();
+            this.stream = null;
+        }
+        this.dropMetric.stop(); // NAT-021
+    }
 
 		console.log("[GoogleSTT] Stopping stream...");
 		this.isActive = false;
@@ -163,22 +172,52 @@ export class GoogleSTT extends EventEmitter {
 		}
 	}
 
-	public destroy(): void {
-		this.stop();
-		this.removeAllListeners();
-	}
+    private buffer: Buffer[] = [];
+    // NAT-021: count overflow drops so silent audio loss is observable.
+    private dropMetric = new DropFrameMetric({ provider: 'google' });
+    private isConnecting = false;
+    private lastConnectAttempt = 0;
+    private proactiveRestartTimer: NodeJS.Timeout | null = null;
 
 	private buffer: Buffer[] = [];
 	private isConnecting = false;
 	private lastConnectAttempt = 0;
 
-	public write(audioData: Buffer): void {
-		if (!this.isActive) return;
+        if (!this.isStreaming || !this.stream) {
+            // Buffer if we are in connecting state, just started, or closed
+            this.buffer.push(audioData);
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
+            
+            if (!this.isConnecting) {
+                if (Date.now() - this.lastConnectAttempt > 1000) {
+                    console.log(`[GoogleSTT] Stream not ready. Lazy connecting on new audio...`);
+                    this.startStream();
+                }
+            }
+            return;
+        }
 
-		if (!this.isStreaming || !this.stream) {
-			// Buffer if we are in connecting state, just started, or closed
-			this.buffer.push(audioData);
-			if (this.buffer.length > 500) this.buffer.shift(); // Cap buffer size
+        // Safety check to prevent "write after destroyed" error
+        if (this.stream.destroyed) {
+            this.isStreaming = false;
+            this.stream = null;
+            this.buffer.push(audioData);
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
+            
+            if (!this.isConnecting) {
+                if (Date.now() - this.lastConnectAttempt > 1000) {
+                    console.log(`[GoogleSTT] Stream destroyed. Lazy reconnecting...`);
+                    this.startStream();
+                }
+            }
+            return;
+        }
 
 			if (!this.isConnecting) {
 				if (Date.now() - this.lastConnectAttempt > 1000) {
@@ -213,21 +252,100 @@ export class GoogleSTT extends EventEmitter {
 				console.log(`[GoogleSTT] Writing ${audioData.length} bytes to stream`);
 			}
 
-			if (this.stream.command && this.stream.command.writable) {
-				this.stream.write(audioData);
-			} else if (this.stream.writable) {
-				this.stream.write(audioData);
-			} else {
-				console.warn("[GoogleSTT] Stream not writable!");
-			}
-		} catch (err) {
-			console.error("[GoogleSTT] Safe write failed:", err);
-			this.isStreaming = false;
-		}
-	}
+    private clearProactiveRestartTimer(): void {
+        if (this.proactiveRestartTimer) {
+            clearTimeout(this.proactiveRestartTimer);
+            this.proactiveRestartTimer = null;
+        }
+    }
 
-	private flushBuffer(): void {
-		if (!this.stream) return;
+    private scheduleProactiveRestart(streamRef: any): void {
+        this.clearProactiveRestartTimer();
+        if (!this.isActive) return;
+
+        this.proactiveRestartTimer = setTimeout(() => {
+            if (!this.isActive || this.stream !== streamRef) {
+                return;
+            }
+
+            console.log('[GoogleSTT] Proactively rotating stream before Google streaming limit');
+            this.restartStream();
+        }, GoogleSTT.PROACTIVE_RESTART_MS);
+    }
+
+    private restartStream(): void {
+        const previousStream = this.stream;
+        this.clearProactiveRestartTimer();
+        this.isStreaming = false;
+        this.isConnecting = false;
+        this.stream = null;
+
+        if (previousStream) {
+            try {
+                previousStream.end();
+                previousStream.destroy();
+            } catch (error) {
+                console.warn('[GoogleSTT] Failed to tear down proactive rollover stream:', error);
+            }
+        }
+
+        if (this.isActive) {
+            this.startStream();
+        }
+    }
+
+    private startStream(): void {
+        this.lastConnectAttempt = Date.now();
+        this.isStreaming = true;
+        this.isConnecting = true;
+
+        const activeStream = this.client
+            .streamingRecognize({
+                config: {
+                    encoding: this.encoding,
+                    sampleRateHertz: this.sampleRateHertz,
+                    audioChannelCount: this.audioChannelCount,
+                    languageCode: this.languageCode,
+                    enableAutomaticPunctuation: true,
+                    model: 'latest_long',
+                    useEnhanced: true,
+                    alternativeLanguageCodes: this.alternativeLanguageCodes,
+                },
+                interimResults: true,
+            })
+            .on('error', (err: Error) => {
+                if (this.stream !== activeStream) return;
+                console.error('[GoogleSTT] Stream error:', err);
+                this.emit('error', err);
+                this.isConnecting = false;
+                this.isStreaming = false;
+                this.stream = null;
+                this.clearProactiveRestartTimer();
+            })
+            .on('end', () => {
+                if (this.stream !== activeStream) return;
+                console.log('[GoogleSTT] Stream ended server-side (idle timeout)');
+                this.isConnecting = false;
+                this.isStreaming = false;
+                this.stream = null;
+                this.clearProactiveRestartTimer();
+            })
+            .on('close', () => {
+                if (this.stream !== activeStream) return;
+                console.log('[GoogleSTT] Stream closed server-side');
+                this.isConnecting = false;
+                this.isStreaming = false;
+                this.stream = null;
+                this.clearProactiveRestartTimer();
+            })
+            .on('data', (data: any) => {
+                if (this.stream !== activeStream) return;
+                // ... (existing data handler)
+                if (data.results[0] && data.results[0].alternatives[0]) {
+                    const result = data.results[0];
+                    const alt = result.alternatives[0];
+                    const transcript = alt.transcript;
+                    const isFinal = result.isFinal;
 
 		while (this.buffer.length > 0) {
 			const data = this.buffer.shift();
@@ -241,10 +359,14 @@ export class GoogleSTT extends EventEmitter {
 		}
 	}
 
-	private startStream(): void {
-		this.lastConnectAttempt = Date.now();
-		this.isStreaming = true;
-		this.isConnecting = true;
+        this.stream = activeStream;
+
+        // Initialize writeable check or wait for 'open'? 
+        // gRPC streams are usually writeable immediately.
+        // We can flush immediately after creation.
+        this.isConnecting = false;
+        this.flushBuffer();
+        this.scheduleProactiveRestart(activeStream);
 
 		this.stream = this.client
 			.streamingRecognize({

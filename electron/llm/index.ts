@@ -40,12 +40,35 @@ export {
 } from "./TemporalContextBuilder";
 export type { TranscriptTurn } from "./transcriptCleaner";
 export {
-	cleanTranscript,
-	formatTranscriptForLLM,
-	prepareTranscriptForReasoning,
-	prepareTranscriptForWhatToAnswer,
-	sparsifyTranscript,
-} from "./transcriptCleaner";
-export type { GeminiContent, GenerationConfig, LLMClient } from "./types";
+    buildTemporalContext,
+    formatTemporalContextForPrompt
+} from "./TemporalContextBuilder";
+export type { TemporalContext, AssistantResponse } from "./TemporalContextBuilder";
+export {
+    classifyIntent,
+    getAnswerShapeGuidance,
+    warmupIntentClassifier
+} from "./IntentClassifier";
+export type { ConversationIntent, IntentResult } from "./IntentClassifier";
+export {
+    IntentClassificationCoordinator,
+    FoundationModelsIntentProvider,
+    LegacyIntentProvider,
+    FOUNDATION_INTENT_ALLOWED_INTENTS,
+    FOUNDATION_INTENT_PROMPT_VERSION,
+    FOUNDATION_INTENT_SCHEMA_VERSION,
+    resolveFoundationModelsIntentHelperPath,
+    createIntentProviderError,
+    getIntentProviderErrorCode,
+} from './providers';
+export type {
+    CoordinatedIntentResult,
+    IntentClassificationCoordinatorOptions,
+    IntentClassificationInput,
+    IntentInferenceProvider,
+    IntentProviderError,
+    IntentProviderErrorType,
+    FoundationIntentLabel,
+} from './providers';
 export { MODE_CONFIGS } from "./types";
 export { WhatToAnswerLLM } from "./WhatToAnswerLLM";

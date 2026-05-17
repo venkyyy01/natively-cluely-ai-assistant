@@ -8,6 +8,9 @@
 //
 // Uses 5 weighted signals to calculate confidence that the user is truly done speaking.
 
+import { AdaptivePauseModel, type PauseFeatures } from './AdaptivePauseModel';
+import { isVerifierOptimizationActive } from '../config/optimizations';
+
 export interface PauseSignal {
 	name: string;
 	weight: number;
@@ -54,23 +57,30 @@ export const DEFAULT_PAUSE_DETECTOR_CONFIG: PauseDetectorConfig = {
 };
 
 export class PauseDetector {
-	private config: PauseDetectorConfig;
-	private silenceStartMs: number = 0;
-	private recentTranscripts: string[] = [];
-	private rmsSamples: RMSTrendSample[] = [];
-	private turnStartTime: number = 0;
-	private recentTurnDurations: number[] = [];
-	private avgTurnDurationMs: number = 3000;
-	private onAction:
-		| ((action: PauseAction, confidence: PauseConfidence) => void)
-		| null = null;
-	private evaluationTimer: ReturnType<typeof setTimeout> | null = null;
-	private evaluationStartTime: number = 0;
-	private isActive: boolean = false;
+  private config: PauseDetectorConfig;
+  private silenceStartMs: number = 0;
+  private recentTranscripts: string[] = [];
+  private rmsSamples: RMSTrendSample[] = [];
+  private turnStartTime: number = 0;
+  private recentTurnDurations: number[] = [];
+  private avgTurnDurationMs: number = 3000;
+  private onAction: ((action: PauseAction, confidence: PauseConfidence) => void) | null = null;
+  private evaluationTimer: ReturnType<typeof setTimeout> | null = null;
+  private evaluationStartTime: number = 0;
+  private isActive: boolean = false;
+  private adaptiveModel: AdaptivePauseModel | null = null;
+  private profileId: string = 'default';
 
-	constructor(config: Partial<PauseDetectorConfig> = {}) {
-		this.config = { ...DEFAULT_PAUSE_DETECTOR_CONFIG, ...config };
-	}
+  constructor(config: Partial<PauseDetectorConfig> = {}, profileId: string = 'default') {
+    this.config = { ...DEFAULT_PAUSE_DETECTOR_CONFIG, ...config };
+    this.profileId = profileId;
+    
+    // Initialize adaptive model if flag is enabled
+    const useAdaptive = isVerifierOptimizationActive('useAdaptivePause');
+    if (useAdaptive) {
+      this.adaptiveModel = new AdaptivePauseModel(profileId);
+    }
+  }
 
 	updateConfig(config: Partial<PauseDetectorConfig>): void {
 		this.config = { ...this.config, ...config };
@@ -89,45 +99,72 @@ export class PauseDetector {
 		this.onAction = handler;
 	}
 
-	/**
-	 * Called when speech starts (VAD detects voice)
-	 */
-	onSpeechStarted(): void {
-		this.silenceStartMs = 0;
-		this.turnStartTime = Date.now();
-		this.cancelEvaluation();
-		this.isActive = false;
-	}
+  /**
+   * Called when speech starts (VAD detects voice)
+   */
+  onSpeechStarted(): void {
+    this.silenceStartMs = 0;
+    this.turnStartTime = Date.now();
+    this.cancelEvaluation();
+    this.isActive = false;
 
-	/**
-	 * Called when speech ends (VAD hangover elapsed)
-	 */
-	onSpeechEnded(): void {
-		// Record turn duration if we have a start time
-		if (this.turnStartTime > 0) {
-			const duration = Date.now() - this.turnStartTime;
-			this.recentTurnDurations.push(duration);
-			// Keep last 10 turns for averaging
-			if (this.recentTurnDurations.length > 10) {
-				this.recentTurnDurations.shift();
-			}
-			this.avgTurnDurationMs =
-				this.recentTurnDurations.reduce((a, b) => a + b, 0) /
-				this.recentTurnDurations.length;
-		}
+    // Update adaptive model: user continued speaking (label 0)
+    if (this.adaptiveModel && this.silenceStartMs > 0) {
+      const silenceMs = Date.now() - this.silenceStartMs;
+      this.updateAdaptiveModel(silenceMs, 0);
+    }
+  }
 
-		this.silenceStartMs = Date.now();
-		this.isActive = true;
-		this.evaluationStartTime = Date.now();
-		this.startEvaluation();
-	}
+  /**
+   * Called when speech ends (VAD hangover elapsed)
+   */
+  onSpeechEnded(): void {
+    // Record turn duration if we have a start time
+    if (this.turnStartTime > 0) {
+      const duration = Date.now() - this.turnStartTime;
+      this.recentTurnDurations.push(duration);
+      if (this.recentTurnDurations.length > 10) {
+        this.recentTurnDurations.shift();
+      }
+      this.avgTurnDurationMs = this.recentTurnDurations.reduce((sum, d) => sum + d, 0) / this.recentTurnDurations.length;
+    }
 
-	/**
-	 * Feed transcript segments for completeness analysis
-	 */
-	updateTranscripts(segments: string[]): void {
-		this.recentTranscripts = segments.slice(-5);
-	}
+    this.silenceStartMs = Date.now();
+    this.evaluationStartTime = Date.now();
+    this.isActive = true;
+    this.startEvaluation();
+  }
+
+  /**
+   * Called when user confirms they are done speaking (commit action)
+   */
+  onUserCommit(): void {
+    if (this.adaptiveModel && this.silenceStartMs > 0) {
+      const silenceMs = Date.now() - this.silenceStartMs;
+      this.updateAdaptiveModel(silenceMs, 1);
+    }
+  }
+
+  private updateAdaptiveModel(silenceMs: number, label: number): void {
+    if (!this.adaptiveModel) return;
+
+    const features: PauseFeatures = {
+      silenceDuration: this.scoreSilenceDuration(silenceMs),
+      transcriptCompleteness: this.scoreTranscriptCompleteness(),
+      semanticCompleteness: this.scoreSemanticCompleteness(),
+      conversationRhythm: this.scoreConversationRhythm(),
+      audioEnergyDecay: this.scoreEnergyDecay(),
+    };
+
+    this.adaptiveModel.update(features, label);
+  }
+
+  /**
+   * Feed transcript segments for completeness analysis
+   */
+  updateTranscripts(segments: string[]): void {
+    this.recentTranscripts = segments.slice(-5);
+  }
 
 	/**
 	 * Feed RMS samples for energy decay analysis
@@ -167,10 +204,13 @@ export class PauseDetector {
 		return this.isActive && this.silenceStartMs > 0;
 	}
 
-	private startEvaluation(): void {
-		this.cancelEvaluation();
-		this.evaluate();
-	}
+  private startEvaluation(): void {
+    if (this.evaluationTimer) {
+      clearTimeout(this.evaluationTimer);
+      this.evaluationTimer = null;
+    }
+    this.evaluate();
+  }
 
 	private evaluate(): void {
 		if (!this.isActive || this.silenceStartMs === 0) return;
@@ -207,34 +247,63 @@ export class PauseDetector {
 		);
 	}
 
-	private calculateConfidence(silenceMs: number): PauseConfidence {
-		const signals: PauseSignal[] = [
-			{
-				name: "silence_duration",
-				weight: 0.25,
-				value: this.scoreSilenceDuration(silenceMs),
-			},
-			{
-				name: "transcript_completeness",
-				weight: 0.3,
-				value: this.scoreTranscriptCompleteness(),
-			},
-			{
-				name: "semantic_completeness",
-				weight: 0.2,
-				value: this.scoreSemanticCompleteness(),
-			},
-			{
-				name: "conversation_rhythm",
-				weight: 0.15,
-				value: this.scoreConversationRhythm(),
-			},
-			{
-				name: "audio_energy_decay",
-				weight: 0.1,
-				value: this.scoreEnergyDecay(),
-			},
-		];
+  private calculateConfidence(silenceMs: number): PauseConfidence {
+    const silenceDurationScore = this.scoreSilenceDuration(silenceMs);
+    const transcriptCompletenessScore = this.scoreTranscriptCompleteness();
+    const semanticCompletenessScore = this.scoreSemanticCompleteness();
+    const conversationRhythmScore = this.scoreConversationRhythm();
+    const audioEnergyDecayScore = this.scoreEnergyDecay();
+
+    let weights: { silenceDuration: number; transcriptCompleteness: number; semanticCompleteness: number; conversationRhythm: number; audioEnergyDecay: number };
+    
+    // Use adaptive weights if model is ready, otherwise use hardcoded weights
+    if (this.adaptiveModel && this.adaptiveModel.isReady()) {
+      const adaptiveWeights = this.adaptiveModel.getCurrentWeights();
+      weights = {
+        silenceDuration: adaptiveWeights.silenceDuration,
+        transcriptCompleteness: adaptiveWeights.transcriptCompleteness,
+        semanticCompleteness: adaptiveWeights.semanticCompleteness,
+        conversationRhythm: adaptiveWeights.conversationRhythm,
+        audioEnergyDecay: adaptiveWeights.audioEnergyDecay,
+      };
+    } else {
+      // Use hardcoded weights
+      weights = {
+        silenceDuration: 0.25,
+        transcriptCompleteness: 0.30,
+        semanticCompleteness: 0.20,
+        conversationRhythm: 0.15,
+        audioEnergyDecay: 0.10,
+      };
+    }
+
+    const signals: PauseSignal[] = [
+      {
+        name: 'silence_duration',
+        weight: weights.silenceDuration,
+        value: silenceDurationScore,
+      },
+      {
+        name: 'transcript_completeness',
+        weight: weights.transcriptCompleteness,
+        value: transcriptCompletenessScore,
+      },
+      {
+        name: 'semantic_completeness',
+        weight: weights.semanticCompleteness,
+        value: semanticCompletenessScore,
+      },
+      {
+        name: 'conversation_rhythm',
+        weight: weights.conversationRhythm,
+        value: conversationRhythmScore,
+      },
+      {
+        name: 'audio_energy_decay',
+        weight: weights.audioEnergyDecay,
+        value: audioEnergyDecayScore,
+      },
+    ];
 
 		const score = signals.reduce((sum, s) => sum + s.weight * s.value, 0);
 

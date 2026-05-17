@@ -30,34 +30,29 @@ function needsRecovery(snapshot: PrivacyShieldRecoverySnapshot): boolean {
 }
 
 export class PrivacyShieldRecoveryController {
-	private readonly getSnapshot: () => PrivacyShieldRecoverySnapshot;
-	private readonly recoverFullStealth: () => Promise<void>;
-	private readonly recoveryDelayMs: number;
-	private readonly maxAutoRecoveryAttempts: number;
-	private readonly timeoutScheduler: (
-		callback: () => void,
-		delayMs: number,
-	) => unknown;
-	private readonly clearTimeoutScheduler: (handle: unknown) => void;
-	private readonly logger: Pick<Console, "log" | "warn">;
-	private recoveryHandle: unknown = null;
-	private recoveryInFlight = false;
-	private autoRecoveryAttempts = 0;
+  private readonly getSnapshot: () => PrivacyShieldRecoverySnapshot;
+  private readonly recoverFullStealth: () => Promise<void>;
+  private readonly recoveryDelayMs: number;
+  private readonly maxAutoRecoveryAttempts: number;
+  private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
+  private readonly clearTimeoutScheduler: (handle: unknown) => void;
+  private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private recoveryHandle: unknown = null;
+  private recoveryInFlight: Promise<void> | null = null;
+  private autoRecoveryAttempts = 0;
 
-	constructor(options: PrivacyShieldRecoveryControllerOptions) {
-		this.getSnapshot = options.getSnapshot;
-		this.recoverFullStealth = options.recoverFullStealth;
-		this.recoveryDelayMs = options.recoveryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS;
-		this.maxAutoRecoveryAttempts =
-			options.maxAutoRecoveryAttempts ?? DEFAULT_MAX_AUTO_RECOVERY_ATTEMPTS;
-		this.timeoutScheduler =
-			options.timeoutScheduler ??
-			((callback, delayMs) => setTimeout(callback, delayMs));
-		this.clearTimeoutScheduler =
-			options.clearTimeoutScheduler ??
-			((handle) => clearTimeout(handle as NodeJS.Timeout));
-		this.logger = options.logger ?? console;
-	}
+  private hourlyRecoveryTimestamps: number[] = [];
+  private static readonly MAX_RECOVERIES_PER_HOUR = 10;
+
+  constructor(options: PrivacyShieldRecoveryControllerOptions) {
+    this.getSnapshot = options.getSnapshot;
+    this.recoverFullStealth = options.recoverFullStealth;
+    this.recoveryDelayMs = options.recoveryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+    this.maxAutoRecoveryAttempts = options.maxAutoRecoveryAttempts ?? DEFAULT_MAX_AUTO_RECOVERY_ATTEMPTS;
+    this.timeoutScheduler = options.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.clearTimeoutScheduler = options.clearTimeoutScheduler ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
+    this.logger = options.logger ?? console;
+  }
 
 	update(): void {
 		const snapshot = this.getSnapshot();
@@ -72,18 +67,26 @@ export class PrivacyShieldRecoveryController {
 			return;
 		}
 
-		if (
-			this.recoveryInFlight ||
-			this.recoveryHandle !== null ||
-			this.autoRecoveryAttempts >= this.maxAutoRecoveryAttempts
-		) {
-			return;
-		}
+    if (
+      this.recoveryInFlight !== null ||
+      this.recoveryHandle !== null ||
+      this.autoRecoveryAttempts >= this.maxAutoRecoveryAttempts
+    ) {
+      return;
+    }
 
-		this.recoveryHandle = this.timeoutScheduler(() => {
-			this.recoveryHandle = null;
-			void this.runAutoRecovery();
-		}, this.recoveryDelayMs);
+    // Session-level cap: max 10 recoveries per hour
+    const now = Date.now();
+    this.hourlyRecoveryTimestamps = this.hourlyRecoveryTimestamps.filter(t => now - t < 3600000);
+    if (this.hourlyRecoveryTimestamps.length >= PrivacyShieldRecoveryController.MAX_RECOVERIES_PER_HOUR) {
+      this.logger.warn('[PrivacyShieldRecovery] Hourly recovery cap reached. Manual recovery required via shortcut.');
+      return;
+    }
+
+    this.recoveryHandle = this.timeoutScheduler(() => {
+      this.recoveryHandle = null;
+      void this.runAutoRecovery();
+    }, this.recoveryDelayMs);
 
 		const timeoutLikeHandle = this.recoveryHandle as { unref?: () => void };
 		timeoutLikeHandle.unref?.();
@@ -103,40 +106,56 @@ export class PrivacyShieldRecoveryController {
 			return;
 		}
 
-		this.autoRecoveryAttempts += 1;
-		await this.attemptRecovery("timeout");
-	}
+    this.autoRecoveryAttempts += 1;
+    this.hourlyRecoveryTimestamps.push(Date.now());
+    await this.attemptRecovery('timeout');
+  }
 
-	private async attemptRecovery(
-		source: "shortcut" | "timeout",
-	): Promise<boolean> {
-		const snapshot = this.getSnapshot();
-		if (
-			!needsRecovery(snapshot) ||
-			hasCaptureRiskWarnings(snapshot.warnings) ||
-			this.recoveryInFlight
-		) {
-			return false;
-		}
+  private async attemptRecovery(source: 'shortcut' | 'timeout'): Promise<boolean> {
+    const snapshot = this.getSnapshot();
+    if (!needsRecovery(snapshot) || hasCaptureRiskWarnings(snapshot.warnings)) {
+      return false;
+    }
 
-		this.recoveryInFlight = true;
-		try {
-			await this.recoverFullStealth();
-			return true;
-		} catch (error) {
-			this.logger.warn(
-				`[PrivacyShieldRecovery] ${source} recovery failed:`,
-				error,
-			);
-			return false;
-		} finally {
-			this.recoveryInFlight = false;
-			if (!needsRecovery(this.getSnapshot())) {
-				this.autoRecoveryAttempts = 0;
-			}
-			this.update();
-		}
-	}
+    // NAT-030: single-flight recovery — return existing promise if already in flight
+    if (this.recoveryInFlight) {
+      await this.recoveryInFlight;
+      return true;
+    }
+
+    // Take atomic warning snapshot before recovery
+    const preRecoveryWarnings = snapshot.warnings.slice();
+
+    this.recoveryInFlight = this.runRecoveryBody(source, preRecoveryWarnings);
+    try {
+      await this.recoveryInFlight;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async runRecoveryBody(source: 'shortcut' | 'timeout', preRecoveryWarnings: readonly string[]): Promise<void> {
+    try {
+      await this.recoverFullStealth();
+    } catch (error) {
+      this.logger.warn(`[PrivacyShieldRecovery] ${source} recovery failed:`, error);
+      throw error;
+    } finally {
+      this.recoveryInFlight = null;
+      // NAT-030: re-check warnings after recovery; if capture-risk still present, keep shield
+      const postSnapshot = this.getSnapshot();
+      if (hasCaptureRiskWarnings(postSnapshot.warnings) || hasCaptureRiskWarnings(preRecoveryWarnings)) {
+        // Do not clear attempts or shield while capture risk persists
+        this.update();
+        return;
+      }
+      if (!needsRecovery(postSnapshot)) {
+        this.autoRecoveryAttempts = 0;
+      }
+      this.update();
+    }
+  }
 
 	private cancelPendingRecovery(): void {
 		if (this.recoveryHandle === null) {
@@ -147,8 +166,9 @@ export class PrivacyShieldRecoveryController {
 		this.recoveryHandle = null;
 	}
 
-	private reset(): void {
-		this.autoRecoveryAttempts = 0;
-		this.cancelPendingRecovery();
-	}
+  private reset(): void {
+    this.autoRecoveryAttempts = 0;
+    this.hourlyRecoveryTimestamps = [];
+    this.cancelPendingRecovery();
+  }
 }

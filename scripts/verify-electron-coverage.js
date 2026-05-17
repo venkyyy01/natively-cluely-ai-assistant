@@ -15,9 +15,12 @@ const COVERAGE_EXCLUDES = [
 ];
 
 function parseCoverageSummary(output) {
-	const allFilesLine = output
-		.split("\n")
-		.find((line) => line.toLowerCase().includes("all files"));
+  const allFilesLine = output
+    .split('\n')
+    .find((line) => {
+      const lower = line.toLowerCase();
+      return lower.includes('all files') && line.includes('|');
+    });
 
 	if (!allFilesLine) {
 		throw new Error("Coverage summary not found in test output.");

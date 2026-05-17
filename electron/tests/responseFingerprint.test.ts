@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponseFingerprinter } from "../conscious/ResponseFingerprint";
 
-test("ResponseFingerprinter flags exact duplicates", () => {
-	const fingerprinter = new ResponseFingerprinter();
-	fingerprinter.record("I would start with a token bucket.");
+test('ResponseFingerprinter flags exact duplicates', () => {
+  const fingerprinter = new ResponseFingerprinter(20, 0);
+  fingerprinter.record('I would start with a token bucket.');
 
 	const duplicate = fingerprinter.isDuplicate(
 		"I would start with a token bucket.",

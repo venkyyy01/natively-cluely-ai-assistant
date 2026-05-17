@@ -49,15 +49,63 @@ test("StealthSupervisor arms and disarms through the delegate while emitting sta
 	]);
 });
 
-test("StealthSupervisor fails closed when arm verification fails", async () => {
-	const delegateCalls: boolean[] = [];
-	const faultReasons: string[] = [];
-	const clearedHandles: unknown[] = [];
-	const heartbeatHandle = { unref() {} };
-	const bus = createBus();
-	bus.subscribe("stealth:fault", async (event) => {
-		faultReasons.push(event.reason);
-	});
+test('StealthSupervisor fails closed when required native helper arm is skipped by the arm guard', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const skippedReasons: string[] = [];
+  let nativeArmCalls = 0;
+  const bus = createBus();
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+  bus.subscribe('stealth:native-arm-skipped', async (event) => {
+    skippedReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge: {
+        arm: async () => {
+          nativeArmCalls += 1;
+          return { connected: true, sessionId: 'session-a', surfaceId: 'surface-a' };
+        },
+        heartbeat: async () => ({ connected: false, healthy: false }),
+        fault: async () => {},
+      } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
+      nativeArmGuard: () => ({ allowed: false, reason: 'screen-capture-agent-with-meeting-app' }),
+      requireNativeStealth: true,
+      heartbeatIntervalMs: 0,
+    },
+  );
+
+  await supervisor.start();
+  await assert.rejects(() => supervisor.setEnabled(true), /native stealth helper did not arm/);
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, []);
+  assert.equal(nativeArmCalls, 0);
+  assert.deepEqual(faultReasons, ['native stealth helper did not arm']);
+  assert.deepEqual(skippedReasons, ['screen-capture-agent-with-meeting-app']);
+});
+
+test('StealthSupervisor fails closed when arm verification fails', async () => {
+  const delegateCalls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const clearedHandles: unknown[] = [];
+  const heartbeatHandle = { unref() {} };
+  const bus = createBus();
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
 
 	const supervisor = new StealthSupervisor(
 		{
@@ -87,26 +135,35 @@ test("StealthSupervisor fails closed when arm verification fails", async () => {
 	assert.deepEqual(clearedHandles, []);
 });
 
-test("StealthSupervisor can re-arm from FAULT back to FULL_STEALTH", async () => {
-	const calls: boolean[] = [];
-	const bus = createBus();
-	const supervisor = new StealthSupervisor(
-		{
-			async setEnabled(enabled: boolean) {
-				calls.push(enabled);
-			},
-			isEnabled: () => calls[calls.length - 1] ?? false,
-			verifyStealthState: () => true,
-		},
-		bus,
-	);
+test('StealthSupervisor can re-arm from FAULT back to FULL_STEALTH after cooldown', async () => {
+  const calls: boolean[] = [];
+  const bus = createBus();
+  let now = 0;
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      now: () => now,
+    },
+  );
 
-	await supervisor.start();
-	await supervisor.setEnabled(true);
-	await supervisor.reportFault(new Error("window_visible_to_capture"));
-	assert.equal(supervisor.getStealthState(), "FAULT");
+  await supervisor.start();
+  await supervisor.setEnabled(true);
 
-	await supervisor.setEnabled(true);
+  // Report fault at time 0
+  await supervisor.reportFault(new Error('window_visible_to_capture'));
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+
+  // Advance time past the 5s cooldown (S-3: FAULT_COOLDOWN_MS)
+  now = 6000;
+
+  await supervisor.setEnabled(true);
 
 	assert.equal(supervisor.getStealthState(), "FULL_STEALTH");
 	assert.deepEqual(calls, [true, true]);
@@ -833,10 +890,11 @@ test("StealthSupervisor fails closed once the native helper disconnects after ex
 	heartbeatTicks[0]?.();
 	await new Promise((resolve) => setImmediate(resolve));
 
-	assert.equal(supervisor.getStealthState(), "FAULT");
-	assert.deepEqual(calls, [true]);
-	assert.deepEqual(faultReasons, ["stealth heartbeat missed"]);
-	assert.equal(createCalls, 3);
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true]);
+  // S-6: Now emits specific fault reason when restart budget is exhausted
+  assert.deepEqual(faultReasons, ['native-bridge-restart-exhausted: heartbeat']);
+  assert.equal(createCalls, 3);
 });
 
 test("StealthSupervisor fails closed after the native helper disconnects and its one restart attempt fails", async () => {

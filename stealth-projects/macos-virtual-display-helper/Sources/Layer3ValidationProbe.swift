@@ -131,10 +131,15 @@ public struct DefaultLayer3ValidationProbe: Layer3ValidationProbing {
     public func validate(snapshot: Layer3PresenterValidationSnapshot) -> Layer3ValidationReport {
         let windows = provider.currentWindows()
         let matchedWindowNumber = windows.contains { $0.windowNumber == snapshot.windowNumber }
-        let matchedWindowTitle = windows.contains { $0.title == snapshot.windowTitle }
+        // Only match on title if the snapshot has a non-empty title to avoid
+        // false positives from the many system windows with empty titles.
+        let matchedWindowTitle = !snapshot.windowTitle.isEmpty && windows.contains { $0.title == snapshot.windowTitle }
         let windowEnumerated = matchedWindowNumber || matchedWindowTitle
         let shareableWindows = shareableContentProvider.currentWindows()
-        let matchedShareableContentWindow = shareableWindows.contains { $0.windowNumber == snapshot.windowNumber || $0.title == snapshot.windowTitle }
+        let matchedShareableContentWindow = shareableWindows.contains {
+            $0.windowNumber == snapshot.windowNumber ||
+            (!snapshot.windowTitle.isEmpty && $0.title == snapshot.windowTitle)
+        }
         let screenCaptureKitEnumerated = matchedShareableContentWindow
 
         if windowEnumerated || screenCaptureKitEnumerated {

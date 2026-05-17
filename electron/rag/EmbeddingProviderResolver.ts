@@ -16,21 +16,28 @@ export class EmbeddingProviderResolver {
 	private static aneProviderAvailable: boolean | null = null;
 	private static aneProviderChecked: boolean = false;
 
-	/**
-	 * Returns the best available provider.
-	 * Runs isAvailable() checks in priority order.
-	 * Local model is the unconditional fallback — always last.
-	 */
-	static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
-		// ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
-		if (isOptimizationActive("useANEEmbeddings")) {
-			const aneProvider = new ANEEmbeddingProvider();
+  /**
+   * Returns the best available provider.
+   * Runs isAvailable() checks in priority order.
+   * Local model is the unconditional fallback — always last.
+   */
+  static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
+    // ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
+    if (isOptimizationActive('useANEEmbeddings')) {
+      if (!EmbeddingProviderResolver.aneProviderChecked) {
+        const aneProvider = ANEEmbeddingProvider.getSharedInstance();
+        await aneProvider.initialize();
+        EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
+        EmbeddingProviderResolver.aneProviderChecked = true;
+      }
 
-			if (!EmbeddingProviderResolver.aneProviderChecked) {
-				EmbeddingProviderResolver.aneProviderAvailable =
-					await aneProvider.isAvailable();
-				EmbeddingProviderResolver.aneProviderChecked = true;
-			}
+      const sharedAne = ANEEmbeddingProvider.getSharedInstance();
+      if (EmbeddingProviderResolver.aneProviderAvailable && sharedAne.isInitialized()) {
+        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${sharedAne.name} (${sharedAne.dimensions}d)`);
+        return sharedAne;
+      }
+      console.log('[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers');
+    }
 
 			if (EmbeddingProviderResolver.aneProviderAvailable) {
 				console.log(

@@ -19,6 +19,19 @@ interface AppleSiliconQoSOptions {
 	logger?: Pick<Console, "warn">;
 }
 
+function shouldWarnOnQoSLoadFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return true;
+  }
+
+  const nodeError = error as NodeJS.ErrnoException;
+  if (nodeError.code === 'MODULE_NOT_FOUND') {
+    return false;
+  }
+
+  return !/Cannot find module .*qos_helper\.node/.test(error.message);
+}
+
 function defaultAddonLoader(): AppleSiliconQoSAddon {
 	return require("../native/qos_helper.node") as AppleSiliconQoSAddon;
 }
@@ -43,22 +56,21 @@ export function createAppleSiliconQoS(
 			throw new Error("qos helper did not export setCurrentThreadQoS");
 		}
 
-		return {
-			supported: true,
-			setCurrentThreadQoS(qosClass) {
-				addon.setCurrentThreadQoS?.(qosClass);
-			},
-		};
-	} catch (error) {
-		logger.warn(
-			"[AppleSiliconQoS] QoS helper unavailable, continuing without QoS placement:",
-			error,
-		);
-		return {
-			supported: false,
-			setCurrentThreadQoS() {},
-		};
-	}
+    return {
+      supported: true,
+      setCurrentThreadQoS(qosClass) {
+        addon.setCurrentThreadQoS?.(qosClass);
+      },
+    };
+  } catch (error) {
+    if (shouldWarnOnQoSLoadFailure(error)) {
+      logger.warn('[AppleSiliconQoS] QoS helper unavailable, continuing without QoS placement:', error);
+    }
+    return {
+      supported: false,
+      setCurrentThreadQoS() {},
+    };
+  }
 }
 
 export const appleSiliconQoS = createAppleSiliconQoS();

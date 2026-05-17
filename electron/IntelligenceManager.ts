@@ -39,7 +39,7 @@ export type {
 	TranscriptSegment,
 } from "./SessionTracker";
 
-export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
+export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite";
 
 /**
  * IntelligenceManager - Facade for the intelligence layer.
@@ -50,9 +50,10 @@ export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
  * - MeetingPersistence: meeting stop/save/recovery
  */
 export class IntelligenceManager extends EventEmitter {
-	private session: SessionTracker;
-	private engine: IntelligenceEngine;
-	private persistence: MeetingPersistence;
+    private session: SessionTracker;
+    private engine: IntelligenceEngine;
+    private persistence: MeetingPersistence;
+    private accelerationManager: AccelerationManager | null = null;
 
 	constructor(llmHelper: LLMHelper) {
 		super();
@@ -134,23 +135,27 @@ export class IntelligenceManager extends EventEmitter {
 	// Context Management (delegates to session)
 	// ============================================
 
-	setMeetingMetadata(metadata: any): void {
-		this.session.setMeetingMetadata(metadata);
-		const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId;
-		if (typeof inferredMeetingId === "string" && inferredMeetingId.trim()) {
-			this.session.ensureMeetingContext(inferredMeetingId.trim());
-		}
-	}
+    setMeetingMetadata(metadata: any): void {
+        const previousMeetingId = this.session.getActiveMeetingId();
+        this.session.setMeetingMetadata(metadata);
+        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId || metadata?.title;
+        if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
+            const nextMeetingId = inferredMeetingId.trim();
+            if (previousMeetingId && previousMeetingId !== 'unspecified' && previousMeetingId !== nextMeetingId) {
+                this.accelerationManager?.clearCaches();
+            }
+            this.session.ensureMeetingContext(nextMeetingId);
+        }
+    }
 
 	getSessionTracker(): SessionTracker {
 		return this.session;
 	}
 
-	attachAccelerationManager(
-		accelerationManager: AccelerationManager | null,
-	): void {
-		this.engine.attachAccelerationManager(accelerationManager);
-	}
+    attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
+        this.accelerationManager = accelerationManager;
+        this.engine.attachAccelerationManager(accelerationManager);
+    }
 
 	setSupervisorBus(bus?: SupervisorBusEmitter): void {
 		this.session.setSupervisorBus(bus);
@@ -181,9 +186,22 @@ export class IntelligenceManager extends EventEmitter {
 		return this.session.getLastAssistantMessage();
 	}
 
-	setConsciousModeEnabled(enabled: boolean): void {
-		this.session.setConsciousModeEnabled(enabled);
-	}
+    setConsciousModeEnabled(enabled: boolean): void {
+        // NAT-CM-AUDIT: idempotent — only act when the value actually changes.
+        const previous = this.session.isConsciousModeEnabled();
+        this.session.setConsciousModeEnabled(enabled);
+        if (previous === enabled) {
+            return;
+        }
+        // NAT-CM-AUDIT: cascade the toggle into the engine so its internal
+        // conscious-mode caches (orchestrator state, cooldown queues, fingerprint
+        // history, in-flight assist) are cleared too. Without this, a prior
+        // screenshot-extracted coding problem can keep biasing answers toward
+        // A/B/C/D structure even after the user toggles conscious mode off and
+        // back on. The session-level reset alone isn't sufficient because the
+        // engine holds derived state.
+        this.engine.onConsciousModeToggled();
+    }
 
 	cancelActiveWhatToSay(reason?: string): void {
 		this.engine.cancelActiveWhatToSay(reason);
@@ -311,10 +329,8 @@ export class IntelligenceManager extends EventEmitter {
 	// Reset (resets all sub-modules)
 	// ============================================
 
-	async reset(): Promise<void> {
-		this.engine.removeAllListeners();
-		this.removeAllListeners();
-		await this.session.reset();
-		this.engine.reset();
-	}
+  async reset(): Promise<void> {
+    await this.session.reset();
+    this.engine.reset();
+  }
 }

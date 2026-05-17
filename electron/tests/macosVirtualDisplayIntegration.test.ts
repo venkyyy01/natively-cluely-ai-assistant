@@ -58,17 +58,14 @@ test("resolveMacosVirtualDisplayHelperPath returns null when helper resolution i
 	assert.equal(resolved, null);
 });
 
-test("resolveMacosVirtualDisplayHelperPath falls back to the local Swift build output", () => {
-	const resolved = resolveMacosVirtualDisplayHelperPath({
-		env: {},
-		cwd: "/workspace",
-		pathExists: (candidate) =>
-			candidate.endsWith(
-				"/stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper",
-			),
-	});
+test('resolveMacosVirtualDisplayHelperPath does not use enumerable virtual-display helpers by default', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {},
+    cwd: '/workspace',
+    pathExists: (candidate) => candidate.endsWith('/stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper'),
+  });
 
-	assert.match(resolved ?? "", /stealth-virtual-display-helper$/);
+  assert.equal(resolved, null);
 });
 
 test("resolveMacosVirtualDisplayHelperPath resolves Intel full stealth helper build outputs", () => {
@@ -102,30 +99,25 @@ test("createMacosVirtualDisplayCoordinator returns a coordinator with the given 
 	assert.ok(coordinator);
 });
 
-test("resolveMacosVirtualDisplayHelperPath uses resourcesPath when provided", () => {
-	const resolved = resolveMacosVirtualDisplayHelperPath({
-		env: {},
-		cwd: "/workspace",
-		resourcesPath: "/app/resources",
-		pathExists: (candidate) =>
-			candidate === "/app/resources/bin/macos/stealth-virtual-display-helper",
-	});
+test('resolveMacosVirtualDisplayHelperPath can opt into legacy enumerable helpers for validation only', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: { NATIVELY_ALLOW_ENUMERABLE_VIRTUAL_DISPLAY_HELPER: '1' },
+    cwd: '/workspace',
+    resourcesPath: '/app/resources',
+    pathExists: (candidate) => candidate === '/app/resources/bin/macos/system-services-helper',
+  });
 
-	assert.equal(
-		resolved,
-		"/app/resources/bin/macos/stealth-virtual-display-helper",
-	);
+  assert.equal(resolved, '/app/resources/bin/macos/system-services-helper');
 });
 
-test("resolveMacosVirtualDisplayHelperPath falls through env check when env var is missing", () => {
-	const resolved = resolveMacosVirtualDisplayHelperPath({
-		env: {},
-		cwd: "/workspace",
-		pathExists: (candidate) =>
-			candidate.endsWith(".build/debug/stealth-virtual-display-helper"),
-	});
+test('resolveMacosVirtualDisplayHelperPath does not fall through to legacy helper when env var is missing', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {},
+    cwd: '/workspace',
+    pathExists: (candidate) => candidate.endsWith('.build/debug/stealth-virtual-display-helper'),
+  });
 
-	assert.match(resolved ?? "", /stealth-virtual-display-helper$/);
+  assert.equal(resolved, null);
 });
 
 test("MacosVirtualDisplayCoordinator dispose releases active sessions and disposes client", async () => {

@@ -10,15 +10,17 @@ interface ThemeConfig {
 }
 
 export class ThemeManager {
-	private static instance: ThemeManager;
-	private mode: ThemeMode = "system";
-	private configPath: string;
+    private static instance: ThemeManager;
+    // Dark is the safe default until the light launcher surfaces are fully tokenized.
+    private mode: ThemeMode = 'dark';
+    private configPath: string;
 
-	private constructor() {
-		this.configPath = path.join(app.getPath("userData"), "theme-config.json");
-		this.loadConfig();
-		this.setupListeners();
-	}
+    private constructor() {
+        this.configPath = path.join(app.getPath('userData'), 'theme-config.json');
+        this.loadConfig();
+        this.applyNativeThemeSource();
+        this.setupListeners();
+    }
 
 	public static getInstance(): ThemeManager {
 		if (!ThemeManager.instance) {
@@ -52,33 +54,28 @@ export class ThemeManager {
 		}
 	}
 
-	private setupListeners() {
-		nativeTheme.on("updated", () => {
-			if (this.mode === "system") {
-				this.broadcastThemeChange();
-			}
-		});
-	}
+    private applyNativeThemeSource() {
+        nativeTheme.themeSource = this.mode;
+    }
+
+    private setupListeners() {
+        nativeTheme.on('updated', () => {
+            if (this.mode === 'system') {
+                this.broadcastThemeChange();
+            }
+        });
+    }
 
 	public getMode(): ThemeMode {
 		return this.mode;
 	}
 
-	public setMode(mode: ThemeMode) {
-		this.mode = mode;
-		this.saveConfig();
-
-		// Force native theme update if not system, so electron internal UI matches if possible
-		if (mode === "dark") {
-			nativeTheme.themeSource = "dark";
-		} else if (mode === "light") {
-			nativeTheme.themeSource = "light";
-		} else {
-			nativeTheme.themeSource = "system";
-		}
-
-		this.broadcastThemeChange();
-	}
+    public setMode(mode: ThemeMode) {
+        this.mode = mode;
+        this.saveConfig();
+        this.applyNativeThemeSource();
+        this.broadcastThemeChange();
+    }
 
 	public getResolvedTheme(): ResolvedTheme {
 		if (this.mode === "system") {

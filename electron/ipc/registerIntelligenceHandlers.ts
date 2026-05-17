@@ -1,11 +1,14 @@
-import { ipcSchemas, parseIpcInput } from "../ipcValidation";
-import type { AppState } from "../main";
-import type { SafeHandle, SafeHandleValidated } from "./registerTypes";
+import type { AppState } from '../main';
+import { ipcSchemas, parseIpcInput } from '../ipcValidation';
+import type { SafeHandle, SafeHandleValidated } from './registerTypes';
+import { getDefaultTriggerAuditLog } from '../observability/TriggerAuditLog';
+import { resolveUserDataFilePaths } from './userDataPathGuard';
 
 type RegisterIntelligenceHandlersDeps = {
-	appState: AppState;
-	safeHandle: SafeHandle;
-	safeHandleValidated: SafeHandleValidated;
+  appState: AppState;
+  safeHandle: SafeHandle;
+  safeHandleValidated: SafeHandleValidated;
+  getUserDataPath: () => string;
 };
 
 type RuntimeCoordinatorLike = {
@@ -59,52 +62,51 @@ function getIntelligenceFacade(appState: AppState): InferenceSupervisorLike {
 	return appState.getIntelligenceManager();
 }
 
-export function registerIntelligenceHandlers({
-	appState,
-	safeHandle,
-	safeHandleValidated,
-}: RegisterIntelligenceHandlersDeps): void {
-	safeHandle("generate-assist", async () => {
-		const insight = await getIntelligenceFacade(appState).runAssistMode?.();
-		return { insight };
-	});
+export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated, getUserDataPath }: RegisterIntelligenceHandlersDeps): void {
+  safeHandle('generate-assist', async () => {
+    const insight = await getIntelligenceFacade(appState).runAssistMode?.();
+    return { insight };
+  });
 
-	safeHandleValidated(
-		"generate-what-to-say",
-		(args) => {
-			const question =
-				typeof args[0] === "undefined"
-					? undefined
-					: parseIpcInput(
-							ipcSchemas.intelligenceQuestion,
-							args[0],
-							"generate-what-to-say",
-						);
-			const imagePaths =
-				typeof args[1] === "undefined"
-					? undefined
-					: parseIpcInput(
-							ipcSchemas.intelligenceImagePaths,
-							args[1],
-							"generate-what-to-say",
-						);
-			return [question, imagePaths] as const;
-		},
-		async (_event, question?: string, imagePaths?: string[]) => {
-			const resolvedQuestion = question || "inferred from context";
+  safeHandleValidated('generate-what-to-say', (args) => {
+    const question = typeof args[0] === 'undefined'
+      ? undefined
+      : parseIpcInput(ipcSchemas.intelligenceQuestion, args[0], 'generate-what-to-say');
+    const imagePaths = typeof args[1] === 'undefined'
+      ? undefined
+      : parseIpcInput(ipcSchemas.intelligenceImagePaths, args[1], 'generate-what-to-say');
+    return [question, imagePaths] as const;
+  }, async (_event, question?: string, imagePaths?: string[]) => {
+    const resolvedQuestion = question || 'inferred from context';
+    const facade = getIntelligenceFacade(appState);
+    const safeImagePaths = resolveUserDataFilePaths(getUserDataPath(), imagePaths);
 
-			try {
-				const answer = await getIntelligenceFacade(
-					appState,
-				).runWhatShouldISay?.(question, 0.8, imagePaths);
-				if (answer == null) {
-					return {
-						answer: null,
-						question: resolvedQuestion,
-						status: "canceled" as const,
-						error: "Request canceled before completion.",
-					};
-				}
+    // NAT-SELF-HEAL: helper that attempts the call with one retry on null.
+    // Null usually means a transient race (cooldown, abort controller, or
+    // stealth containment) — a single retry after a short delay recovers
+    // the vast majority of cases.
+    const tryGenerate = async (attempt: number): Promise<string | null> => {
+      const answer = await facade.runWhatShouldISay?.(question, 0.8, safeImagePaths);
+      if (answer) return answer;
+
+      if (attempt === 1) {
+        console.warn('[IPC] generate-what-to-say returned null on attempt 1, retrying after 400ms...');
+        await new Promise((r) => setTimeout(r, 400));
+        return tryGenerate(2);
+      }
+      return null;
+    };
+
+    try {
+      const answer = await tryGenerate(1);
+      if (!answer) {
+        return {
+          answer: null,
+          question: resolvedQuestion,
+          status: 'canceled' as const,
+          error: 'Request canceled before completion. Retry with the current settings.',
+        };
+      }
 
 				return {
 					answer,
@@ -189,12 +191,16 @@ export function registerIntelligenceHandlers({
 		};
 	});
 
-	safeHandle("reset-intelligence", async () => {
-		try {
-			await getIntelligenceFacade(appState).reset?.();
-			return { success: true };
-		} catch (error: any) {
-			return { success: false, error: error.message };
-		}
-	});
+  safeHandle('get-trigger-decision-audit', async () => ({
+    entries: getDefaultTriggerAuditLog().getEntries(250),
+  }));
+
+  safeHandle('reset-intelligence', async () => {
+    try {
+      await getIntelligenceFacade(appState).reset?.();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
 }

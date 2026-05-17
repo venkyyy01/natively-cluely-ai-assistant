@@ -1,4 +1,14 @@
-import type { IntentResult } from "../llm/IntentClassifier";
+import type { IntentResult } from '../llm/IntentClassifier';
+import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
+import { getIntentConfidenceService } from '../llm/IntentConfidenceService';
+
+export function isStrongConsciousIntent(intentResult?: IntentResult | null): boolean {
+  return getIntentConfidenceService().isStrongConsciousIntent(intentResult);
+}
+
+export function isUncertainConsciousIntent(intentResult?: IntentResult | null): boolean {
+  return getIntentConfidenceService().isUncertainConsciousIntent(intentResult);
+}
 
 export interface ResolvedIntentResult extends IntentResult {
 	reason?: string;
@@ -11,26 +21,45 @@ export interface ConsciousIntentResolution {
 }
 
 export class ConsciousIntentService {
-	async resolve(input: {
-		lastInterviewerTurn: string | null;
-		preparedTranscript: string;
-		assistantResponseCount: number;
-		startedAt: number;
-		hardBudgetMs: number;
-		isLikelyGeneralIntent: boolean;
-		classifyIntent: (
-			lastInterviewerTurn: string | null,
-			preparedTranscript: string,
-			assistantResponseCount: number,
-		) => Promise<IntentResult>;
-	}): Promise<ConsciousIntentResolution> {
-		let intentResult: ResolvedIntentResult = {
-			intent: "general",
-			confidence: 0,
-			answerShape: "",
-			reason: "context_assembly_timeout",
-		};
-		let timedOut = false;
+  async resolve(input: {
+    lastInterviewerTurn: string | null;
+    preparedTranscript: string;
+    assistantResponseCount: number;
+    startedAt: number;
+    hardBudgetMs: number;
+    isLikelyGeneralIntent: boolean;
+    classifyIntent: (
+      lastInterviewerTurn: string | null,
+      preparedTranscript: string,
+      assistantResponseCount: number,
+    ) => Promise<IntentResult>;
+    prefetchedIntent?: CoordinatedIntentResult | null;
+  }): Promise<ConsciousIntentResolution> {
+    if (input.prefetchedIntent) {
+      // NAT-L3: Accept prefetched intent if it's non-general. Previously,
+      // anything below minReliableConfidence (0.72) was discarded, forcing a
+      // live re-classify that almost always times out (NAT-L1). A 0.55
+      // deep_dive is far more useful than a timed-out general/0.
+      if (input.prefetchedIntent.intent === 'general') {
+        console.log(
+          `[ConsciousIntentService] intent.prefetch_discarded_general confidence=${input.prefetchedIntent.confidence?.toFixed?.(3) ?? input.prefetchedIntent.confidence}`,
+        );
+      } else {
+        return {
+          intentResult: input.prefetchedIntent,
+          totalContextAssemblyMs: Date.now() - input.startedAt,
+          timedOut: false,
+        };
+      }
+    }
+
+    let intentResult: ResolvedIntentResult = {
+      intent: 'general',
+      confidence: 0,
+      answerShape: '',
+      reason: 'context_assembly_timeout',
+    };
+    let timedOut = false;
 
 		const contextAssemblyElapsed = Date.now() - input.startedAt;
 		if (contextAssemblyElapsed < input.hardBudgetMs) {

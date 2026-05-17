@@ -1,72 +1,64 @@
-import { execFile } from "node:child_process";
-import { EventEmitter } from "events";
-
-interface WindowInfo {
-	windowId: number;
-	ownerPid: number;
-	ownerName: string;
-	bundleId?: string;
-	layer: number;
-	alpha: number;
-	sharingState?: string;
-}
+import { execFile } from 'node:child_process';
+import { EventEmitter } from 'events';
+import { decideStealthFallback } from './StealthFallbackPolicy';
+import { loadNativeStealthModule } from './nativeStealthModule';
 
 interface StealthEnhancerOptions {
-	platform?: string;
-	logger?: Pick<Console, "log" | "warn" | "error">;
-	commandRunner?: (command: string, args: string[]) => Promise<string>;
+  platform?: string;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  commandRunner?: (command: string, args: string[]) => Promise<string>;
+  nativeModule?: NativeMacosStealthBindings | null;
 }
 
-const CHROME_BUNDLE_IDS = new Set([
-	"com.google.Chrome",
-	"org.chromium.Chromium",
-	"com.microsoft.edgemac",
-	"com.brave.Browser",
-	"com.operasoftware.Opera",
-	"company.thebrowser.Browser",
-]);
+interface NativeMacosWindowInfo {
+  windowNumber: number;
+  ownerPid: number;
+}
+
+interface NativeMacosStealthBindings {
+  applyMacosWindowStealth?: (windowNumber: number) => void;
+  removeMacosWindowStealth?: (windowNumber: number) => void;
+  setMacosWindowLevel?: (windowNumber: number, level: number) => void;
+  listVisibleWindows?: () => NativeMacosWindowInfo[];
+}
+
+// kCGUtilityWindowLevel equivalent (NSWindowLevel.utility = 19)
+// See electron/stealth/implementation-plan.md §6.2 / §8.1
+const MACOS_UTILITY_WINDOW_LEVEL = 19;
 
 export class MacosStealthEnhancer extends EventEmitter {
-	private readonly platform: string;
-	private readonly logger: Pick<Console, "log" | "warn" | "error">;
-	private readonly commandRunner: (
-		command: string,
-		args: string[],
-	) => Promise<string>;
-	private enhancedWindows = new Set<number>();
+  private readonly platform: string;
+  private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
+  private readonly commandRunner: (command: string, args: string[]) => Promise<string>;
+  private nativeModule: NativeMacosStealthBindings | null | undefined;
+  private enhancedWindows = new Set<number>();
 
-	constructor(options: StealthEnhancerOptions = {}) {
-		super();
-		this.platform = options.platform ?? process.platform;
-		this.logger = options.logger ?? console;
-		this.commandRunner =
-			options.commandRunner ??
-			((command, args) => this.execPromise(command, args));
-	}
+  constructor(options: StealthEnhancerOptions = {}) {
+    super();
+    this.platform = options.platform ?? process.platform;
+    this.logger = options.logger ?? console;
+    this.commandRunner = options.commandRunner ?? ((command, args) => this.execPromise(command, args));
+    this.nativeModule = options.nativeModule;
+  }
 
 	async enhanceWindowProtection(windowNumber: number): Promise<boolean> {
 		if (this.platform !== "darwin") {
 			return false;
 		}
 
-		try {
-			const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
-			await this.applyWindowLevel(safeWindowNumber, 0);
-			await this.disableWindowSharing(safeWindowNumber);
-			this.enhancedWindows.add(safeWindowNumber);
-			this.logger.log(
-				`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`,
-			);
-			this.emit("window-enhanced", safeWindowNumber);
-			return true;
-		} catch (error) {
-			this.logger.warn(
-				"[MacosStealthEnhancer] Failed to enhance window protection:",
-				error,
-			);
-			return false;
-		}
-	}
+    try {
+      const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
+      await this.applyWindowLevel(safeWindowNumber, MACOS_UTILITY_WINDOW_LEVEL);
+      await this.disableWindowSharing(safeWindowNumber);
+      this.enhancedWindows.add(safeWindowNumber);
+      this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);
+      this.emit('window-enhanced', safeWindowNumber);
+      return true;
+    } catch (error) {
+      this.logger.warn('[MacosStealthEnhancer] Failed to enhance window protection:', error);
+      return false;
+    }
+  }
 
 	async removeEnhancedProtection(windowNumber: number): Promise<void> {
 		if (this.platform !== "darwin") {
@@ -152,11 +144,14 @@ export class MacosStealthEnhancer extends EventEmitter {
 		return sessions;
 	}
 
-	private async applyWindowLevel(
-		windowNumber: number,
-		level: number,
-	): Promise<void> {
-		await this.execPython(`
+  private async applyWindowLevel(windowNumber: number, level: number): Promise<void> {
+    const nativeModule = this.getNativeModule();
+    if (nativeModule?.setMacosWindowLevel) {
+      nativeModule.setMacosWindowLevel(windowNumber, level);
+      return;
+    }
+
+    await this.execDevelopmentPythonFallback(`
 import Cocoa
 import sys
 
@@ -173,39 +168,31 @@ for window in windows:
 `);
 	}
 
-	private async disableWindowSharing(windowNumber: number): Promise<void> {
-		await this.execPython(`
-import Cocoa
-import sys
+  private async disableWindowSharing(windowNumber: number): Promise<void> {
+    const nativeModule = this.getNativeModule();
+    // Always use the native module — it handles macOS version branching internally:
+    //   macOS < 15: NSWindow.setSharingType:0 + CGS SPI reinforcement
+    //   macOS 15+:  CGS SPI only (setSharingType crashes on 15+)
+    if (nativeModule?.applyMacosWindowStealth) {
+      nativeModule.applyMacosWindowStealth(windowNumber);
+      return;
+    }
 
-window_number = ${windowNumber}
+    // Only fall back to Python on macOS < 15. On macOS 15+ the Python fallback
+    // would use setSharingType_ which crashes the process.
+    this.logger.warn('[MacosStealthEnhancer] Native module unavailable, skipping window sharing disable');
+  }
 
-app = Cocoa.NSApplication.sharedApplication()
-windows = app.windows()
+  private async enableWindowSharing(windowNumber: number): Promise<void> {
+    const nativeModule = this.getNativeModule();
+    // Always use the native module — it handles macOS version branching internally.
+    if (nativeModule?.removeMacosWindowStealth) {
+      nativeModule.removeMacosWindowStealth(windowNumber);
+      return;
+    }
 
-for window in windows:
-    if window.windowNumber() == window_number:
-        window.setSharingType_(0)
-        break
-`);
-	}
-
-	private async enableWindowSharing(windowNumber: number): Promise<void> {
-		await this.execPython(`
-import Cocoa
-import sys
-
-window_number = ${windowNumber}
-
-app = Cocoa.NSApplication.sharedApplication()
-windows = app.windows()
-
-for window in windows:
-    if window.windowNumber() == window_number:
-        window.setSharingType_(1)
-        break
-`);
-	}
+    this.logger.warn('[MacosStealthEnhancer] Native module unavailable, skipping window sharing restore');
+  }
 
 	private async getChromePids(): Promise<Set<number>> {
 		const pids = new Set<number>();
@@ -246,39 +233,20 @@ for window in windows:
 	): Promise<Set<number>> {
 		const capturedWindows = new Set<number>();
 
-		try {
-			const pidList = Array.from(pids).join(",");
-			const stdout = await this.execPython(`
-import Quartz
-import sys
+    try {
+      const nativeModule = this.getNativeModule();
+      if (!nativeModule?.listVisibleWindows) {
+        throw new Error('native listVisibleWindows unavailable');
+      }
 
-target_pids = {${pidList}}
-windows = Quartz.CGWindowListCopyWindowInfo(
-    Quartz.kCGWindowListOptionAll,
-    Quartz.kCGNullWindowID
-)
-
-captured = []
-for window in windows:
-    owner_pid = window.get('kCGWindowOwnerPID', -1)
-    if owner_pid in target_pids:
-        window_id = window.get('kCGWindowNumber', -1)
-        captured.append(window_id)
-
-print(','.join(str(w) for w in captured))
-`);
-
-			if (stdout && stdout.trim()) {
-				for (const part of stdout.trim().split(",")) {
-					const windowId = parseInt(part, 10);
-					if (Number.isFinite(windowId) && windowId > 0) {
-						capturedWindows.add(windowId);
-					}
-				}
-			}
-		} catch {
-			// Ignore
-		}
+      for (const window of nativeModule.listVisibleWindows()) {
+        if (pids.has(window.ownerPid) && window.windowNumber > 0) {
+          capturedWindows.add(window.windowNumber);
+        }
+      }
+    } catch {
+      // Ignore
+    }
 
 		return capturedWindows;
 	}
@@ -310,9 +278,25 @@ print(','.join(str(w) for w in captured))
 		return null;
 	}
 
-	private async execPython(script: string): Promise<string> {
-		return this.commandRunner("python3", ["-c", script]);
-	}
+  private getNativeModule(): NativeMacosStealthBindings | null {
+    if (this.nativeModule !== undefined) {
+      return this.nativeModule;
+    }
+
+    this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+    return this.nativeModule;
+  }
+
+  private async execDevelopmentPythonFallback(script: string): Promise<string> {
+    const decision = decideStealthFallback({ kind: 'python' });
+    if (!decision.allow) {
+      this.logger.warn(`[MacosStealthEnhancer] Python fallback blocked: ${decision.reason}`);
+      throw new Error(decision.reason);
+    }
+
+    this.logger.log(`[MacosStealthEnhancer] Python fallback policy: ${decision.reason}`);
+    return this.commandRunner('python3', ['-c', script]);
+  }
 
 	private execPromise(command: string, args: string[]): Promise<string> {
 		return new Promise((resolve, reject) => {

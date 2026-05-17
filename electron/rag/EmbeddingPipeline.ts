@@ -49,35 +49,28 @@ export class EmbeddingPipeline {
 		return this.initPromise;
 	}
 
-	private async _doInitialize(config: AppAPIConfig): Promise<void> {
-		// ── Step 1: Eagerly init the local fallback FIRST, independently of the primary.
-		// This guarantees fallbackProvider is set even if the primary throws,
-		// so activateMeetingFallback() is always safe to call.
-		try {
-			const local = new LocalEmbeddingProvider();
-			if (await local.isAvailable()) {
-				this.fallbackProvider = local;
-				console.log(
-					`[EmbeddingPipeline] Local fallback provider ready (${local.dimensions}d)`,
-				);
-			} else {
-				console.warn(
-					"[EmbeddingPipeline] Local fallback provider unavailable — bundled model may be missing",
-				);
-			}
-		} catch (e) {
-			console.warn(
-				"[EmbeddingPipeline] Could not initialize local fallback provider:",
-				e,
-			);
-		}
+    private async ensureFallbackProviderAvailable(): Promise<boolean> {
+        if (!this.fallbackProvider) {
+            this.fallbackProvider = new LocalEmbeddingProvider();
+        }
 
-		// ── Step 2: Resolve primary provider.
-		try {
-			this.provider = await EmbeddingProviderResolver.resolve(config);
-			console.log(
-				`[EmbeddingPipeline] Ready with provider: ${this.provider.name} (${this.provider.dimensions}d)`,
-			);
+        try {
+            return await this.fallbackProvider.isAvailable();
+        } catch (error) {
+            console.warn('[EmbeddingPipeline] Local fallback provider unavailable — bundled model may be missing', error);
+            return false;
+        }
+    }
+
+    private async _doInitialize(config: AppAPIConfig): Promise<void> {
+        // ── Step 1: Prepare the local fallback lazily so startup never blocks on transformers.js / ONNX.
+        this.fallbackProvider = new LocalEmbeddingProvider();
+        console.log(`[EmbeddingPipeline] Local fallback provider prepared (${this.fallbackProvider.dimensions}d, lazy init)`);
+
+        // ── Step 2: Resolve primary provider.
+        try {
+            this.provider = await EmbeddingProviderResolver.resolve(config);
+            console.log(`[EmbeddingPipeline] Ready with provider: ${this.provider.name} (${this.provider.dimensions}d)`);
 
 			// If the primary IS local, point fallbackProvider at the same instance to avoid
 			// loading the model twice.
@@ -150,12 +143,25 @@ export class EmbeddingPipeline {
 		}
 	}
 
-	/**
-	 * Check if pipeline is ready
-	 */
-	isReady(): boolean {
-		return this.provider !== null;
-	}
+        } catch (err) {
+            console.error('[EmbeddingPipeline] Failed to initialize primary provider:', err);
+            // Don't rethrow — if we have a fallback, the pipeline can still function
+            // in local-only mode. Callers check isReady() which checks this.provider.
+            // Only throw if we also have no fallback at all.
+            const fallbackAvailable = await this.ensureFallbackProviderAvailable();
+            if (!fallbackAvailable || !this.fallbackProvider) {
+                throw err;
+            }
+            console.warn('[EmbeddingPipeline] Falling back to local-only mode for all meetings.');
+            // Promote fallback as the primary so isReady() returns true and queueing works.
+            this.provider = this.fallbackProvider;
+            // Persist the fallback provider name so the next launch does not fire a
+            // false-positive incompatible-provider warning (e.g. 'openai' vs 'local').
+            try {
+                this.db.prepare("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_embedding_provider', ?)").run(this.provider.name);
+            } catch (_) { /* non-fatal — DB may not have app_state yet in edge cases */ }
+        }
+    }
 
 	/**
 	 * Wait for the pipeline to finish initializing.
@@ -376,24 +382,23 @@ export class EmbeddingPipeline {
 		}
 	}
 
-	/**
-	 * Downgrade a meeting to on-device (local) embedding after primary provider exhaustion.
-	 * 1. Clears all PENDING/PROCESSING embeddings so dimension mismatch cannot occur.
-	 *    Already-completed items are left alone to avoid redundant re-embedding.
-	 * 2. Resets non-completed queue items for the meeting back to pending with sentinel retry_count=-1
-	 *    so processQueue knows to use fallbackProvider unconditionally.
-	 * 3. Notifies the renderer so the user sees an informative toast.
-	 */
-	private async activateMeetingFallback(meetingId: string): Promise<void> {
-		if (!this.fallbackProvider) {
-			// Should never happen — guard exists in the caller, but be defensive.
-			console.error(
-				`[EmbeddingPipeline] Cannot activate fallback for ${meetingId}: no local fallback provider available.`,
-			);
-			return;
-		}
-		// Capture in a local const so TypeScript can narrow the type (class fields can't be narrowed).
-		const fallback = this.fallbackProvider;
+    /**
+     * Downgrade a meeting to on-device (local) embedding after primary provider exhaustion.
+     * 1. Clears all PENDING/PROCESSING embeddings so dimension mismatch cannot occur.
+     *    Already-completed items are left alone to avoid redundant re-embedding.
+     * 2. Resets non-completed queue items for the meeting back to pending with sentinel retry_count=-1
+     *    so processQueue knows to use fallbackProvider unconditionally.
+     * 3. Notifies the renderer so the user sees an informative toast.
+     */
+    private async activateMeetingFallback(meetingId: string): Promise<void> {
+        const fallbackAvailable = await this.ensureFallbackProviderAvailable();
+        if (!fallbackAvailable || !this.fallbackProvider) {
+            // Should never happen — guard exists in the caller, but be defensive.
+            console.error(`[EmbeddingPipeline] Cannot activate fallback for ${meetingId}: no local fallback provider available.`);
+            return;
+        }
+        // Capture in a local const so TypeScript can narrow the type (class fields can't be narrowed).
+        const fallback = this.fallbackProvider;
 
 		console.warn(
 			`[EmbeddingPipeline] Primary provider exhausted for meeting ${meetingId}. ` +
@@ -451,15 +456,33 @@ export class EmbeddingPipeline {
 		return this.provider.embed(text);
 	}
 
-	/**
-	 * Get embedding for a search query (may use different prefix for asymmetric models)
-	 */
-	async getEmbeddingForQuery(text: string): Promise<number[]> {
-		if (!this.provider) {
-			throw new Error("Embedding provider not initialized");
-		}
-		return this.provider.embedQuery(text);
-	}
+    /**
+     * Batch embed document chunks (NAT-053). Uses provider.embedBatch when available.
+     */
+    async embedDocumentsBatch(texts: string[]): Promise<number[][]> {
+        if (!this.provider) {
+            throw new Error('Embedding provider not initialized');
+        }
+        if (texts.length === 0) {
+            return [];
+        }
+        try {
+            return await this.provider.embedBatch(texts);
+        } catch (err) {
+            console.warn('[EmbeddingPipeline] embedBatch failed; falling back to per-text embed:', err);
+            return Promise.all(texts.map((t) => this.provider!.embed(t)));
+        }
+    }
+
+    /**
+     * Get embedding for a search query (may use different prefix for asymmetric models)
+     */
+    async getEmbeddingForQuery(text: string): Promise<number[]> {
+        if (!this.provider) {
+            throw new Error('Embedding provider not initialized');
+        }
+        return this.provider.embedQuery(text);
+    }
 
 	/**
 	 * Embed a single chunk using the given provider (defaults to this.provider).

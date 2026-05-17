@@ -107,9 +107,13 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
         }
 
         let descriptor = descriptorClass.init()
-        descriptor.setValue("Natively Private Surface", forKey: "name")
-        descriptor.setValue(NSNumber(value: 0x4E41), forKey: "vendorID")
-        descriptor.setValue(NSNumber(value: 0x5456), forKey: "productID")
+        // Use a generic display name that blends with system displays to avoid
+        // fingerprinting via display enumeration APIs.
+        descriptor.setValue("Display", forKey: "name")
+        // Use Apple's own vendor ID (0x610) so the virtual display looks like a
+        // built-in Apple display in any enumeration output.
+        descriptor.setValue(NSNumber(value: 0x0610), forKey: "vendorID")
+        descriptor.setValue(NSNumber(value: 0xA032), forKey: "productID")
         descriptor.setValue(NSNumber(value: stableSerial(for: request)), forKey: "serialNum")
         descriptor.setValue(NSNumber(value: request.width), forKey: "maxPixelsWide")
         descriptor.setValue(NSNumber(value: request.height), forKey: "maxPixelsHigh")
@@ -118,7 +122,20 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
         descriptor.setValue(NSValue(point: NSPoint(x: 0.265, y: 0.69)), forKey: "greenPrimary")
         descriptor.setValue(NSValue(point: NSPoint(x: 0.15, y: 0.06)), forKey: "bluePrimary")
         descriptor.setValue(NSValue(point: NSPoint(x: 0.3127, y: 0.329)), forKey: "whitePoint")
-        descriptor.setValue(DispatchQueue(label: "ai.natively.virtual-display.\(request.sessionId)"), forKey: "dispatchQueue")
+        descriptor.setValue(DispatchQueue(label: "com.apple.cg.display-\(stableSerial(for: request))"), forKey: "dispatchQueue")
+
+        // macOS 14+: Set hidesDisplay to prevent this virtual display from
+        // appearing in CGGetActiveDisplayList / CGGetOnlineDisplayList and
+        // SCShareableContent.displays enumeration. This is the critical property
+        // that makes the virtual display invisible to any app or site that
+        // enumerates connected displays.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 14 {
+            let hidesSelector = NSSelectorFromString("setHidesDisplay:")
+            if descriptor.responds(to: hidesSelector) {
+                descriptor.setValue(NSNumber(value: true), forKey: "hidesDisplay")
+            }
+        }
+
         return descriptor
     }
 

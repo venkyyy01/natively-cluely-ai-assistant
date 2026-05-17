@@ -112,13 +112,19 @@ class ImmediateStreamingLLMHelper {
 	}
 }
 
-function addTurn(
-	session: SessionTracker,
-	speaker: "interviewer" | "assistant",
-	text: string,
-	timestamp: number,
-): void {
-	session.handleTranscript({ speaker, text, timestamp, final: true });
+class StaticStreamingLLMHelper {
+  public calls = 0;
+
+  constructor(private readonly answer: string) {}
+
+  async *streamChat(_message: string, _imagePaths?: string[], _context?: string, _prompt?: string): AsyncGenerator<string> {
+    this.calls += 1;
+    yield this.answer;
+  }
+}
+
+function addTurn(session: SessionTracker, speaker: 'interviewer' | 'assistant', text: string, timestamp: number): void {
+  session.handleTranscript({ speaker, text, timestamp, final: true });
 }
 
 test("fast path uses the latest interim interviewer transcript in the generated prompt", async () => {
@@ -337,11 +343,92 @@ test("stealth containment blocks new what-to-say generation while containment is
 	assert.equal(session.getLastAssistantMessage(), null);
 });
 
-test("stealth containment cancels in-flight what-to-say work before any answer is emitted", async () => {
-	const session = new SessionTracker();
-	const llmHelper = new AbortAwareLLMHelper();
-	const engine = new IntelligenceEngine(llmHelper as any, session);
-	const finalAnswers: string[] = [];
+test('what-to-say suppresses unresolved manual triggers instead of emitting placeholder answers', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.equal(llmHelper.calls, 0);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('what-to-say uses the resolved transcript question as the display and usage label', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const labels: string[] = [];
+
+  engine.on('suggested_answer', (_answer: string, question: string) => {
+    labels.push(question);
+  });
+
+  addTurn(session, 'interviewer', 'How should we handle retries?', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, 'immediate answer');
+  assert.deepEqual(labels, ['How should we handle retries?']);
+  assert.equal(session.getFullUsage().at(-1)?.question, 'How should we handle retries?');
+});
+
+test('what-to-say suppresses persona leakage before final answer persistence', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new StaticStreamingLLMHelper("I'm ChatGPT, an OpenAI model, and I would answer this generally.");
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Tell me about yourself.', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+  assert.equal(session.getFullUsage().length, 0);
+});
+
+test('what-to-say suppresses coding-shaped answers for non-coding questions', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new StaticStreamingLLMHelper([
+    '```python',
+    'class Solution:',
+    '    def solve(self):',
+    '        pass',
+    '```',
+    'Time complexity is O(n). Space complexity is O(1).',
+  ].join('\n'));
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Tell me about yourself.', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+  assert.equal(session.getFullUsage().length, 0);
+});
+
+test('stealth containment cancels in-flight what-to-say work before any answer is emitted', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new AbortAwareLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
 
 	engine.on("suggested_answer", (answer: string) => {
 		finalAnswers.push(answer);
@@ -372,11 +459,35 @@ test("stealth containment cancels in-flight what-to-say work before any answer i
 	assert.equal(session.getLastAssistantMessage(), null);
 });
 
-test("cooldown queue aborts after the maximum defer depth instead of recursively growing the stack", async () => {
-	const session = new SessionTracker();
-	const llmHelper = new ImmediateStreamingLLMHelper();
-	const engine = new IntelligenceEngine(llmHelper as any, session);
-	(engine as any).triggerCooldown = 1_000;
+test('stealth containment blocks all non-primary output modes while containment is active', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  addTurn(session, 'interviewer', 'How would you summarize this design?', Date.now() - 10);
+  session.addAssistantMessage('Start with the critical path and then discuss backpressure handling.');
+  (engine as any).setStealthContainmentActive(true);
+
+  const assist = await engine.runAssistMode();
+  const followUp = await engine.runFollowUp('shorten', 'Make it shorter');
+  const recap = await engine.runRecap();
+  const followUpQuestions = await engine.runFollowUpQuestions();
+  const manual = await engine.runManualAnswer('How would you answer this?');
+
+  assert.equal(assist, null);
+  assert.equal(followUp, null);
+  assert.equal(recap, null);
+  assert.equal(followUpQuestions, null);
+  assert.equal(manual, null);
+  assert.equal(llmHelper.calls, 0);
+  assert.equal(session.getLastAssistantMessage(), 'Start with the critical path and then discuss backpressure handling.');
+});
+
+test('cooldown queue aborts after the maximum defer depth instead of recursively growing the stack', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  (engine as any).triggerCooldown = 1_000;
 
 	const errors: string[] = [];
 	engine.on("error", (error: Error) => {

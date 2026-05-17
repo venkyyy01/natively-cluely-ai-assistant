@@ -1,10 +1,14 @@
 import {
-	type ConsciousModeStructuredResponse,
-	mergeConsciousModeResponses,
-	type ReasoningThread,
-} from "../ConsciousMode";
-import { ThreadManager } from "./ThreadManager";
-import { type InterviewPhase, RESUME_THRESHOLD } from "./types";
+  ConsciousModeStructuredResponse,
+  ReasoningThread,
+  mergeConsciousModeResponses,
+} from '../ConsciousMode';
+import { ThreadManager } from './ThreadManager';
+import { InterviewPhase, RESUME_THRESHOLD } from './types';
+import type { ProbeAnswer } from '../coding/types';
+import { isConsciousOptimizationActive } from '../config/optimizations';
+
+const MAX_PROBES = 8;
 
 export interface PersistedActiveThreadSnapshot {
 	id: string;
@@ -113,49 +117,93 @@ export class ConsciousThreadStore {
 		this.activeReasoningThread = null;
 	}
 
-	recordConsciousResponse(
-		question: string,
-		response: ConsciousModeStructuredResponse,
-		threadAction: "start" | "continue" | "reset",
-	): void {
-		this.latestConsciousResponse = response;
+  /**
+   * NAT-202: Append a Tier-B probe to the active thread.
+   * Root response stays immutable. Probes are capped at MAX_PROBES (LRU eviction).
+   * The optional delta.fact is applied exactly once (dedup by text).
+   */
+  appendProbe(probe: ProbeAnswer): void {
+    if (!this.activeReasoningThread) {
+      return;
+    }
+    const existing = this.activeReasoningThread.probes ?? [];
+    const updated = existing.length >= MAX_PROBES ? existing.slice(1) : existing;
+    updated.push(probe);
 
-		if (threadAction === "continue" && this.activeReasoningThread) {
-			this.activeReasoningThread = {
-				...this.activeReasoningThread,
-				lastQuestion: question,
-				followUpCount: this.activeReasoningThread.followUpCount + 1,
-				response: mergeConsciousModeResponses(
-					this.activeReasoningThread.response,
-					response,
-				),
-				updatedAt: Date.now(),
-			};
-			this.latestConsciousResponse = this.activeReasoningThread.response;
-			const decisions = [
-				response.openingReasoning,
-				response.implementationPlan[0],
-				response.tradeoffs[0],
-				response.scaleConsiderations[0],
-				response.codeTransition,
-			].filter(Boolean);
-			const constraints = [...response.edgeCases, ...response.tradeoffs];
-			for (const decision of decisions) {
-				this.threadManager.addDecisionToActive(decision);
-			}
-			for (const constraint of constraints.slice(0, 4)) {
-				this.threadManager.addConstraintToActive(constraint);
-			}
-			return;
-		}
+    let updatedRoot = this.activeReasoningThread.response;
+    if (probe.delta) {
+      const { fact, attachTo } = probe.delta;
+      const arr: string[] = [...(updatedRoot[attachTo] ?? [])];
+      if (!arr.includes(fact)) {
+        const capped = arr.length >= 8 ? arr.slice(1) : arr;
+        capped.push(fact);
+        updatedRoot = { ...updatedRoot, [attachTo]: capped };
+      }
+    }
 
-		this.activeReasoningThread = {
-			rootQuestion: question,
-			lastQuestion: question,
-			response,
-			followUpCount: 0,
-			updatedAt: Date.now(),
-		};
+    this.activeReasoningThread = {
+      ...this.activeReasoningThread,
+      response: updatedRoot,
+      probes: updated,
+      followUpCount: this.activeReasoningThread.followUpCount + 1,
+      lastQuestion: probe.question,
+      updatedAt: Date.now(),
+    };
+    this.latestConsciousResponse = this.activeReasoningThread.response;
+  }
+
+  recordConsciousResponse(
+    question: string,
+    response: ConsciousModeStructuredResponse,
+    threadAction: 'start' | 'continue' | 'reset'
+  ): void {
+    this.latestConsciousResponse = response;
+    const designThreadId = this.threadManager.getActiveThread()?.id;
+
+    if (threadAction === 'continue' && this.activeReasoningThread) {
+      // NAT-202: When Two-Tier is ON, probe answers are appended via appendProbe().
+      // The full mergeConsciousModeResponses path is only used in legacy (flag OFF) mode.
+      const useTwoTier = isConsciousOptimizationActive('useTwoTierAnswerContract');
+      const mergedResponse = useTwoTier
+        ? this.activeReasoningThread.response
+        : mergeConsciousModeResponses(this.activeReasoningThread.response, response);
+      this.activeReasoningThread = {
+        ...this.activeReasoningThread,
+        threadId: designThreadId ?? this.activeReasoningThread.threadId,
+        lastQuestion: question,
+        followUpCount: this.activeReasoningThread.followUpCount + 1,
+        response: mergedResponse,
+        updatedAt: Date.now(),
+      };
+      this.latestConsciousResponse = this.activeReasoningThread.response;
+      const decisions = [
+        response.openingReasoning,
+        response.implementationPlan[0],
+        response.tradeoffs[0],
+        response.scaleConsiderations[0],
+        response.codeTransition,
+      ].filter(Boolean);
+      const constraints = [
+        ...response.edgeCases,
+        ...response.tradeoffs,
+      ];
+      for (const decision of decisions) {
+        this.threadManager.addDecisionToActive(decision);
+      }
+      for (const constraint of constraints.slice(0, 4)) {
+        this.threadManager.addConstraintToActive(constraint);
+      }
+      return;
+    }
+
+    this.activeReasoningThread = {
+      threadId: designThreadId,
+      rootQuestion: question,
+      lastQuestion: question,
+      response,
+      followUpCount: 0,
+      updatedAt: Date.now(),
+    };
 
 		const decisions = [
 			response.openingReasoning,

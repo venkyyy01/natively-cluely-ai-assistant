@@ -1,0 +1,23 @@
+{
+  "row": {
+    "id": "macos-screencapture-control",
+    "platform": "darwin",
+    "osVersion": "Darwin 25.3.0",
+    "appVersion": "local-dev",
+    "captureTool": "macos-screencapture",
+    "mode": "screenshot",
+    "monitors": 1,
+    "strict": false,
+    "surface": "unprotected-canary-control",
+    "expectedResult": "visible",
+    "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL"
+  },
+  "adapter": "macos-screencapture",
+  "actualResult": "skipped",
+  "passed": false,
+  "reason": "canary surface is not armed; load the generated canary HTML in the protected/control test surface; canaryHtml=/var/folders/64/2h0b15j15p7c6c49w6cz4k8m0000gn/T/capture-matrix-macos-screencapture-control-3MGTSF/macos-screencapture-control-canary.html; set NATIVELY_CAPTURE_MATRIX_CANARY_ARMED=1 when the fixture is visible",
+  "artifactPaths": {
+    "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-screencapture/macos-screencapture-run/macos-screencapture-control/metadata.json",
+    "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-screencapture/macos-screencapture-run/macos-screencapture-control/capture.log"
+  }
+}

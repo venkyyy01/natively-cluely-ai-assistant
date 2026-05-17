@@ -259,16 +259,13 @@ function validatePackagedHelperLaunch(target, options = {}) {
 }
 
 function runReleaseGate(options = {}) {
-	const env = options.env ?? process.env;
-	const runScript = options.runNpmScript ?? runNpmScript;
-	const baselineMetricsReader =
-		options.readBaselineMetrics ?? readBaselineMetrics;
-	const benchmarkRunner =
-		options.runBenchmarksForReleaseGate ?? runBenchmarksForReleaseGate;
-	const helperValidator =
-		options.validatePackagedHelperLaunch ?? validatePackagedHelperLaunch;
-	const soakProfile =
-		env.NATIVELY_RELEASE_GATE_PROFILE === "prerelease" ? "prerelease" : "ci";
+  const env = options.env ?? process.env;
+  const runScript = options.runNpmScript ?? runNpmScript;
+  const baselineMetricsReader = options.readBaselineMetrics ?? readBaselineMetrics;
+  const benchmarkRunner = options.runBenchmarksForReleaseGate ?? runBenchmarksForReleaseGate;
+  const helperValidator = options.validatePackagedHelperLaunch ?? validatePackagedHelperLaunch;
+  const helperTargetResolver = options.resolvePackagedHelperLaunchTarget ?? resolvePackagedHelperLaunchTarget;
+  const soakProfile = env.NATIVELY_RELEASE_GATE_PROFILE === 'prerelease' ? 'prerelease' : 'ci';
 
 	console.log(`[release-gate] profile=${soakProfile}`);
 
@@ -283,15 +280,15 @@ function runReleaseGate(options = {}) {
 	const baselineMetrics = baselineMetricsReader(options.cwd ?? process.cwd());
 	assertMetricsWithinGate(currentMetrics, baselineMetrics, env);
 
-	const packagedHelperLaunchTarget = resolvePackagedHelperLaunchTarget(env, {
-		cwd: options.cwd,
-	});
-	if (packagedHelperLaunchTarget) {
-		helperValidator(packagedHelperLaunchTarget, {
-			env,
-			scriptPath: options.buildAndInstallScriptPath,
-		});
-	}
+  const packagedHelperLaunchTarget = helperTargetResolver(env, {
+    cwd: options.cwd,
+  });
+  if (packagedHelperLaunchTarget) {
+    helperValidator(packagedHelperLaunchTarget, {
+      env,
+      scriptPath: options.buildAndInstallScriptPath,
+    });
+  }
 
 	console.log("[release-gate] all gates passed");
 }
