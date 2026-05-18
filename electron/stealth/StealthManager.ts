@@ -861,22 +861,20 @@ export class StealthManager extends EventEmitter {
   /**
    * Whether the experimental SCK CGS tag path is enabled.
    *
-   * Two ways to opt in:
-   *   1. Acceleration Mode is active (Settings → Acceleration). The
-   *      master `accelerationEnabled` optimization flag flips
-   *      `useStealthMode`, which we treat as the user opting into the
-   *      enhanced experimental stealth surface alongside other
-   *      acceleration-mode features (capture watchdog, SCStream /
-   *      CGWindow / Chromium detection, opacity flicker).
-   *   2. `NATIVELY_TRY_SCK_TAG=1` env var. For power users / CI / smoke
-   *      tests that want to force the path on without flipping
-   *      Acceleration Mode.
+   * Default OFF. Opt in via `NATIVELY_TRY_SCK_TAG=1`.
    *
    * The bit (1 << 3 in `CGSSetWindowTags`) is reverse-engineered from
    * the WindowServer's internal handling of `setSharingType:.none` on
    * macOS 15+. It's undocumented, may shift between releases, and writing
    * it does not give us proof that ScreenCaptureKit honours it (the
-   * read-back via `verifySckExclusion` only confirms our own write).
+   * read-back via `verifySckExclusion` only confirms our own write —
+   * which on macOS 26 returns `false` even after a successful write,
+   * causing the enforcement loop to spin endlessly with "SCK exclusion
+   * lost" warnings).
+   *
+   * Earlier wiring auto-enabled this when Acceleration Mode was on —
+   * removed because the false-negative loop produces nothing useful on
+   * macOS 15+. The bit remains exposed for explicit experimentation.
    *
    * Default flow uses `setContentProtection` (which calls
    * `[NSWindow setSharingType:.none]`) plus the documented private CGS SPI
@@ -884,7 +882,7 @@ export class StealthManager extends EventEmitter {
    * That's the same primitive Apple, Tauri, and Electron use.
    */
   private isSckTagExperimentEnabled(): boolean {
-    return process.env.NATIVELY_TRY_SCK_TAG === '1' || this.isEnhancedStealthEnabled();
+    return process.env.NATIVELY_TRY_SCK_TAG === '1';
   }
 
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {

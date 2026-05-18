@@ -4,7 +4,6 @@ import type { SupervisorBus } from '../runtime/SupervisorBus';
 import type { StealthTickCoordinator } from './StealthTickCoordinator';
 import { gracefulShutdown } from '../GracefulShutdownManager';
 import { loadNativeStealthModule } from './nativeStealthModule';
-import { isOptimizationActive } from '../config/optimizations';
 
 export interface EnforcementLoopIntervals {
   windowProtectionMs: number; // 250ms
@@ -313,12 +312,10 @@ export class ContinuousEnforcementLoop {
    * Whether the experimental SCK CGS tag path is enabled.
    * See `StealthManager.isSckTagExperimentEnabled` for full rationale.
    *
-   * Two ways to opt in:
-   *   • Acceleration Mode is active (`useStealthMode` optimization flag)
-   *   • `NATIVELY_TRY_SCK_TAG=1` env var
+   * Default OFF. Opt in via `NATIVELY_TRY_SCK_TAG=1`.
    */
   private isSckTagExperimentEnabled(): boolean {
-    return process.env.NATIVELY_TRY_SCK_TAG === '1' || isOptimizationActive('useStealthMode');
+    return process.env.NATIVELY_TRY_SCK_TAG === '1';
   }
 
   /**
