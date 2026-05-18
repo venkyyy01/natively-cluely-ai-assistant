@@ -1012,7 +1012,7 @@ this.launcherContentWindow = this.launcherWindow
   //    show. With those bits set, clicking the overlay does NOT promote
   //    Electron to the foreground app, so Chrome does not fire blur.
   const useMacOverlayPanel =
-    process.platform === 'darwin' && process.env.NATIVELY_OVERLAY_NSPANEL === '1'
+    process.platform === 'darwin'
   const overlaySettings: Electron.BrowserWindowConstructorOptions = {
     width: 600,
     height: 1,
