@@ -102,22 +102,43 @@ async function fetchAnthropicModels(apiKey: string): Promise<ProviderModel[]> {
 
     const models: any[] = response.data?.data || [];
 
-    // Only include Claude 3.5+ models (haiku, sonnet, opus)
+    // Only include Claude 3.5+ models. Anthropic ships two id layouts:
+    //   • legacy: `claude-3-5-sonnet-20240620`, `claude-3-7-sonnet-20250219`,
+    //             `claude-4-opus`
+    //   • modern: `claude-sonnet-4-5-20250514`, `claude-opus-4-6`,
+    //             `claude-haiku-4-5-20251001`
+    // We pull the major/minor version pair from either layout and require
+    // version >= 3.5.
+    const extractVersion = (id: string): { major: number; minor: number } | null => {
+        // Legacy major.minor: digits come immediately after `claude-`.
+        // e.g. `claude-3-5-sonnet`, `claude-3-7-sonnet`.
+        const legacyMajorMinor = id.match(/^claude-(\d+)-(\d+)/);
+        if (legacyMajorMinor) {
+            return { major: parseInt(legacyMajorMinor[1], 10), minor: parseInt(legacyMajorMinor[2], 10) };
+        }
+        // Modern: family name (sonnet/opus/haiku/etc.) sits between
+        // `claude-` and the version digits. e.g. `claude-sonnet-4-5`.
+        const modern = id.match(/^claude-[a-z]+-(\d+)-(\d+)/);
+        if (modern) {
+            return { major: parseInt(modern[1], 10), minor: parseInt(modern[2], 10) };
+        }
+        // Legacy single major (no minor): `claude-4-opus`. Treat as x.0.
+        const legacyMajorOnly = id.match(/^claude-(\d+)-[a-z]/);
+        if (legacyMajorOnly) {
+            return { major: parseInt(legacyMajorOnly[1], 10), minor: 0 };
+        }
+        return null;
+    };
+
     const filtered = models.filter((m: any) => {
         const id = (m.id || '').toLowerCase();
         if (!id.includes('claude')) return false;
-        
-        // Match models that are version 3.5, 3.7, 4.0, etc.
-        // e.g. claude-3-5-sonnet, claude-3-7-sonnet, claude-4-opus
-        const versionMatch = id.match(/claude-(\d+)-(\d+)?/);
-        if (versionMatch) {
-            const major = parseInt(versionMatch[1], 10);
-            const minor = versionMatch[2] ? parseInt(versionMatch[2], 10) : 0;
-            if (major > 3 || (major === 3 && minor >= 5)) {
-                return true;
-            }
-        }
-        return false;
+
+        const version = extractVersion(id);
+        if (!version) return false;
+
+        const { major, minor } = version;
+        return major > 3 || (major === 3 && minor >= 5);
     });
 
     return filtered

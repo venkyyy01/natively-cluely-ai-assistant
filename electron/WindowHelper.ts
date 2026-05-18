@@ -707,10 +707,26 @@ export class WindowHelper {
           console.warn('[WindowHelper] blur failed:', err)
         }
       }
+    } else if (process.platform === 'darwin') {
+      // macOS: NSPanel with NSWindowStyleMaskNonactivatingPanel can become
+      // the key window without activating the app. After
+      // setActivationPolicy('accessory'), `focus()` is the only reliable way
+      // to make the panel key — clicks alone won't always promote it
+      // because Chromium's hit-testing on a clickthrough-capable surface
+      // can swallow the activation. We don't activate the app or steal
+      // foreground; we just route first-responder to the panel so the
+      // contentView's <input>/<textarea> elements receive keystrokes.
+      //
+      // Skip while clickthrough is on — clickthrough is a deliberate
+      // "ignore me" mode and shouldn't reach into focus management.
+      if (enabled && !this.overlayClickthroughEnabled && this.overlayWindow.isVisible()) {
+        try {
+          this.overlayWindow.focus()
+        } catch (err) {
+          console.warn('[WindowHelper] overlay focus failed:', err)
+        }
+      }
     }
-    // macOS: NSPanel is permanently non-activating regardless of this flag.
-    // The renderer can still focus inputs via first-responder routing on the
-    // panel — the panel becomes key without activating the app.
   }
 
   public isOverlayInteractive(): boolean {
