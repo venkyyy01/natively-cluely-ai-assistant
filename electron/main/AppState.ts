@@ -3371,17 +3371,13 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         this.settingsWindowHelper.closeWindow();
         this.modelSelectorWindowHelper.hideWindow();
         app.dock.hide();
-        // BLUR-PROOF (macOS Phase 2): when invisible mode is on, switch the
-        // activation policy to 'accessory'. An accessory app cannot become
-        // the active GUI app — even if some code path slips and calls
-        // [NSApp activate], the OS refuses to bring Natively to foreground.
-        // This belt-and-braces guarantees the underlying browser keeps
-        // key-window status no matter what the renderer or Electron does.
-        try {
-          app.setActivationPolicy?.('accessory');
-        } catch (err) {
-          console.warn('[Stealth] setActivationPolicy(accessory) failed:', err);
-        }
+        // NOTE: setActivationPolicy('accessory') was removed. It blocks
+        // keyboard input from reaching the app entirely (keystrokes don't
+        // route to an accessory app even when a window has focus). The mac
+        // branch never used it — `app.dock.hide()` alone removes the app
+        // from Cmd+Tab on macOS, which is the stealth benefit we need.
+        // Keeping the regular activation policy lets the user type into
+        // the overlay text input.
         this.hideTray();
 
         // Focus the window directly without calling .show() 
@@ -3392,14 +3388,8 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       } else {
         console.log('[Stealth] Calling app.dock.show()');
         app.dock.show();
-        // BLUR-PROOF (macOS Phase 2): restore normal activation policy when
-        // leaving invisible mode so the user can interact with menus,
-        // settings windows, IME, etc. as usual.
-        try {
-          app.setActivationPolicy?.('regular');
-        } catch (err) {
-          console.warn('[Stealth] setActivationPolicy(regular) failed:', err);
-        }
+        // setActivationPolicy('regular') is also unnecessary now that we
+        // never set 'accessory' in the first place.
         this.showTray();
 
         // Restore focus when coming back to foreground/dock mode

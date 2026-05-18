@@ -160,13 +160,11 @@ export async function initializeApp() {
   if (appState.getUndetectable()) {
     if (process.platform === 'darwin') {
       app.dock.hide();
-      // BLUR-PROOF (macOS Phase 2): apply 'accessory' activation policy at
-      // startup too so the very first window the OS sees is non-activating.
-      try {
-        app.setActivationPolicy?.('accessory');
-      } catch (err) {
-        console.warn('[bootstrap] setActivationPolicy(accessory) failed:', err);
-      }
+      // NOTE: setActivationPolicy('accessory') was removed. It prevents the
+      // app from receiving keyboard input entirely (keystrokes don't route
+      // to an accessory app). The mac branch never used it. Dock hiding
+      // alone is sufficient for stealth — the app won't appear in Cmd+Tab
+      // when the dock icon is hidden.
     }
   }
 

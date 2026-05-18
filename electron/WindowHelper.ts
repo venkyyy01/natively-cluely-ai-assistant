@@ -709,12 +709,9 @@ export class WindowHelper {
       }
     } else if (process.platform === 'darwin') {
       // macOS: NSPanel with NSWindowStyleMaskNonactivatingPanel can become
-      // the key window without activating the app. After
-      // setActivationPolicy('accessory'), `focus()` is the only reliable way
-      // to make the panel key — clicks alone won't always promote it
-      // because Chromium's hit-testing on a clickthrough-capable surface
-      // can swallow the activation. We don't activate the app or steal
-      // foreground; we just route first-responder to the panel so the
+      // the key window without forcing the app to fully activate. We call
+      // `focus()` to make the panel key when the user toggles into
+      // interactive mode — this routes first-responder to the panel so the
       // contentView's <input>/<textarea> elements receive keystrokes.
       //
       // Skip while clickthrough is on — clickthrough is a deliberate
