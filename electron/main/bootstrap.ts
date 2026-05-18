@@ -226,6 +226,21 @@ export async function initializeApp() {
     }
     KeybindManager.getInstance().registerGlobalShortcuts()
 
+    // Universal kill switch: Cmd+Shift+` (or Ctrl+Shift+` on non-mac)
+    // Force-quits the app immediately regardless of stealth state,
+    // containment, or any other blocking condition. This is the user's
+    // escape hatch when the app is stuck in a black-screen / unresponsive
+    // state due to privacy shield or supervisor faults.
+    const killAccelerator = process.platform === 'darwin' ? 'Command+Shift+`' : 'Control+Shift+`';
+    try {
+      globalShortcut.register(killAccelerator, () => {
+        console.log('[Bootstrap] Kill switch triggered — force-quitting');
+        app.exit(0);
+      });
+    } catch (err) {
+      console.warn('[Bootstrap] Failed to register kill switch shortcut:', err);
+    }
+
     // Pre-create settings window in background for faster first open
     appState.settingsWindowHelper.preloadWindow()
 
