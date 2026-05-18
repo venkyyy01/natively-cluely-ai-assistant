@@ -3953,7 +3953,7 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
   }
 
   private _applyDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
-    let appName = "Natively";
+    let appName = "Stickie$";
     let iconPath = "";
 
     const isWin = process.platform === 'win32';
@@ -3997,7 +3997,7 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
         }
         break;
       case 'none':
-        appName = "Natively";
+        appName = "Stickie$";
         if (isMac) {
           iconPath = app.isPackaged
             ? path.join(process.resourcesPath, "natively.icns")

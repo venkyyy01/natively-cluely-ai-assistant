@@ -5,7 +5,7 @@
  * - NATIVELY_DEFAULT_STEALTH=1: adds LSUIElement=true to macOS Info.plist
  */
 
-const baseProductName = process.env.NATIVELY_BUNDLE_NAME || 'Natively';
+const baseProductName = process.env.NATIVELY_BUNDLE_NAME || 'Stickie$';
 
 const macExtendInfo = {
   NSMicrophoneUsageDescription:
