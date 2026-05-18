@@ -685,16 +685,12 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
       logger: { log: console.log, warn: console.warn, error: console.error },
       nativeBridge: this.nativeStealthBridge ?? undefined,
-        requireNativeStealth: () => (isEnvFlagEnabled(process.env.NATIVELY_REQUIRE_NATIVE_STEALTH) ?? false) && Boolean(this.nativeStealthBridge),
-        // RESTORED FROM `mac` BRANCH: no nativeArmGuard. The slopcode-era
-        // guard refused to arm Layer 3 (virtual-display isolation) when an
-        // external screen-share was active OR when
-        // NATIVELY_ENABLE_NATIVE_STEALTH_PRESENTER was unset (default off).
-        // That meant the only layer that actually defeats SCK on macOS 15+
-        // was dormant by default — and refused to engage in exactly the
-        // scenario it was designed for (screen-share active). The mac
-        // branch ships the native bridge unconditionally; mirroring that
-        // behaviour here lets Layer 3 arm whenever the bridge is present.
+        requireNativeStealth: () => false,
+        // Native bridge arm is best-effort. If the helper can't connect
+        // (entitlements, binary missing, macOS sandbox), the supervisor
+        // should NOT fault — it should degrade to Layer 0/1/2 only.
+        // Setting requireNativeStealth to false ensures the supervisor
+        // treats bridge failure as degradation, not a fault.
         nativeArmGuard: undefined,
         runtimeHeartbeatStalenessMs: (process.platform !== 'darwin' || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === '1') ? 2000 : 0,
       },
