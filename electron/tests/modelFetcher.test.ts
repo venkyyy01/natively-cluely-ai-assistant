@@ -115,8 +115,38 @@ test("fetchProviderModels filters Anthropic models to Claude 3.5+", async () => 
 	}
 });
 
-test("fetchProviderModels filters Gemini models to generateContent-capable 2.5+ models", async () => {
-	const originalGet = axios.get;
+test('fetchProviderModels keeps modern Anthropic id layout (claude-<family>-<major>-<minor>)', async () => {
+  const originalGet = axios.get;
+
+  (axios as any).get = async () => ({
+    data: {
+      data: [
+        { id: 'claude-sonnet-4-5-20250514', display_name: 'Claude Sonnet 4.5' },
+        { id: 'claude-opus-4-6', display_name: 'Claude Opus 4.6' },
+        { id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku 4.5' },
+        { id: 'claude-opus-4-1-20250605', display_name: 'Claude Opus 4.1' },
+        // Pre-3.5 should still be filtered out under either layout.
+        { id: 'claude-2-1', display_name: 'Claude 2.1' },
+        { id: 'claude-3-haiku-20240307', display_name: 'Claude 3 Haiku' },
+      ],
+    },
+  });
+
+  try {
+    const models = await fetchProviderModels('claude', 'sk-ant-test');
+    assert.deepEqual(models, [
+      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+      { id: 'claude-opus-4-1-20250605', label: 'Claude Opus 4.1' },
+      { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+      { id: 'claude-sonnet-4-5-20250514', label: 'Claude Sonnet 4.5' },
+    ]);
+  } finally {
+    (axios as any).get = originalGet;
+  }
+});
+
+test('fetchProviderModels filters Gemini models to generateContent-capable 2.5+ models', async () => {
+  const originalGet = axios.get;
 
 	(axios as any).get = async () => ({
 		data: {

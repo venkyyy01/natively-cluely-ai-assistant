@@ -124,7 +124,7 @@ impl SpeakerInput {
             }
             // Signal the waiting thread
             let (lock, cvar) = &*pair_clone;
-            let mut ready = lock.lock().unwrap();
+            let mut ready = lock.lock().unwrap_or_else(|e| e.into_inner());
             *ready = true;
             cvar.notify_one();
         });
@@ -132,9 +132,10 @@ impl SpeakerInput {
         // Wait for shareable content (max 30 seconds — allows time for macOS permission dialog)
         {
             let (lock, cvar) = &*pair;
-            let mut ready = lock.lock().unwrap();
+            let mut ready = lock.lock().unwrap_or_else(|e| e.into_inner());
             if !*ready {
-                let result = cvar.wait_timeout(ready, std::time::Duration::from_secs(30)).unwrap();
+                let result = cvar.wait_timeout(ready, std::time::Duration::from_secs(30))
+                    .unwrap_or_else(|e| e.into_inner());
                 ready = result.0;
                 if !*ready {
                     println!("[SpeakerInput] Timed out waiting for ScreenCaptureKit permission (30s)");
@@ -147,7 +148,7 @@ impl SpeakerInput {
             return Err(anyhow::anyhow!("ScreenCaptureKit access denied"));
         }
         
-        let content = content_cell.lock().unwrap().take()
+        let content = content_cell.lock().unwrap_or_else(|e| e.into_inner()).take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get shareable content (timeout)"))?;
         
         let displays = content.displays();
@@ -225,7 +226,7 @@ impl SpeakerInput {
             }
             // Signal the waiting thread
             let (lock, cvar) = &*pair_clone;
-            let mut complete = lock.lock().unwrap();
+            let mut complete = lock.lock().unwrap_or_else(|e| e.into_inner());
             *complete = true;
             cvar.notify_one();
         });
@@ -233,7 +234,7 @@ impl SpeakerInput {
         // Wait for start completion (max 10 seconds)
         {
             let (lock, cvar) = &*start_pair;
-            let mut complete = lock.lock().unwrap();
+            let mut complete = lock.lock().unwrap_or_else(|e| e.into_inner());
             if !*complete {
                 let result = cvar.wait_timeout(complete, std::time::Duration::from_secs(10)).unwrap();
                 complete = result.0;
@@ -290,14 +291,14 @@ impl Drop for SpeakerStream {
         self.stream.stop_with_ch(move |_| {
             println!("[SpeakerStream] Stream stopped");
             let (lock, cvar) = &*pair_clone;
-            let mut stopped = lock.lock().unwrap();
+            let mut stopped = lock.lock().unwrap_or_else(|e| e.into_inner());
             *stopped = true;
             cvar.notify_one();
         });
         
         // Wait for stop completion (max 1 second)
         let (lock, cvar) = &*stop_pair;
-        let mut stopped = lock.lock().unwrap();
+        let mut stopped = lock.lock().unwrap_or_else(|e| e.into_inner());
         if !*stopped {
             let result = cvar.wait_timeout(stopped, std::time::Duration::from_secs(1)).unwrap();
             stopped = result.0;

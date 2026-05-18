@@ -48,7 +48,7 @@ describe('AdaptivePauseModel', () => {
   });
 
   it('should not be ready until minimum samples are collected', () => {
-    const model = new AdaptivePauseModel('test-profile');
+    const model = new AdaptivePauseModel(`test-profile-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     
     assert.ok(!model.isReady(), 'Should not be ready with 0 samples');
     

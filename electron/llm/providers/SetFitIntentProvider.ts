@@ -206,8 +206,48 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
   // Xenova fallback inference
   // ---------------------------------------------------------------------------
 
+  private static readonly ZERO_SHOT_LABELS: ConversationIntent[] = [
+    'clarification', 'follow_up', 'deep_dive', 'behavioral',
+    'example_request', 'summary_probe', 'coding', 'general',
+  ];
+
   private async runXenovaInference(text: string): Promise<{ intent: ConversationIntent; confidence: number; latencyMs: number }> {
     const start = Date.now();
+
+    // NAT-SETFIT-FALLBACK: zero-shot classification uses candidate labels
+    // instead of returning pre-trained label indices.
+    if ((this as any)._isZeroShotFallback) {
+      const result = await new Promise<any>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(createIntentProviderError('timeout', `Zero-shot inference timed out after ${this.inferenceTimeoutMs}ms`));
+        }, Math.max(this.inferenceTimeoutMs, 500)); // Zero-shot is slower; allow 500ms minimum
+
+        this.pipe(text, SetFitIntentProvider.ZERO_SHOT_LABELS, { multi_label: false })
+          .then((r: unknown) => {
+            clearTimeout(timer);
+            resolve(r);
+          })
+          .catch((e: unknown) => {
+            clearTimeout(timer);
+            reject(e);
+          });
+      });
+
+      // zero-shot-classification returns { labels: [...], scores: [...] }
+      const labels = result?.labels as string[] | undefined;
+      const scores = result?.scores as number[] | undefined;
+      if (!labels?.length || !scores?.length) {
+        throw createIntentProviderError('invalid_response', 'Zero-shot returned malformed output');
+      }
+
+      return {
+        intent: (SLM_LABEL_MAP[labels[0]] || labels[0]) as ConversationIntent,
+        confidence: scores[0],
+        latencyMs: Date.now() - start,
+      };
+    }
+
+    // Standard text-classification path (custom SetFit model)
     const result = await new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(createIntentProviderError('timeout', `SetFit Xenova inference timed out after ${this.inferenceTimeoutMs}ms`));
@@ -391,9 +431,15 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
     env.allowRemoteModels = false;
     env.localModelPath = resolveBundledModelsPath();
 
-    const modelsToTry = [this.modelName, 'Xenova/nli-deberta-v3-small'];
+    // NAT-SETFIT-FALLBACK: When the custom SetFit model isn't available,
+    // fall back to zero-shot classification using the bundled NLI model.
+    // nli-deberta-v3-small is designed for natural language inference and
+    // works well as a zero-shot classifier with candidate labels. This
+    // avoids requiring a custom-trained model for the app to function.
+    const modelsToTry = [this.modelName];
     let lastError: unknown;
 
+    // First try loading the custom SetFit model as text-classification
     for (const model of modelsToTry) {
       try {
         console.log(`[SetFitIntentProvider] Loading Xenova model: ${model}...`);
@@ -401,7 +447,6 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
           local_files_only: isElectronAppPackaged(),
           quantized: this.quantized,
         });
-        // R1: dispose-race
         if (this.disposed) {
           try {
             if (typeof (pipe as any)?.dispose === 'function') {
@@ -417,6 +462,30 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
         lastError = e;
         console.warn(`[SetFitIntentProvider] Failed to load ${model}:`, e);
       }
+    }
+
+    // Fallback: use nli-deberta-v3-small as zero-shot classifier
+    try {
+      console.log('[SetFitIntentProvider] Loading zero-shot fallback: Xenova/nli-deberta-v3-small...');
+      const pipe = await pipeline('zero-shot-classification', 'Xenova/nli-deberta-v3-small', {
+        local_files_only: isElectronAppPackaged(),
+        quantized: this.quantized,
+      });
+      if (this.disposed) {
+        try {
+          if (typeof (pipe as any)?.dispose === 'function') {
+            await (pipe as any).dispose();
+          }
+        } catch { /* ignore */ }
+        return;
+      }
+      this.pipe = pipe;
+      (this as any)._isZeroShotFallback = true;
+      console.log('[SetFitIntentProvider] Zero-shot fallback loaded (nli-deberta-v3-small)');
+      return;
+    } catch (e) {
+      console.warn('[SetFitIntentProvider] Zero-shot fallback also failed:', e);
+      if (!lastError) lastError = e;
     }
 
     throw lastError;

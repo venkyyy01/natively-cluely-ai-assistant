@@ -84,10 +84,27 @@ export interface NativeStealthBindings {
   checkBrowserCaptureWindows?: () => boolean;
   // T-001: Native process enumeration (replaces pgrep/ps/tasklist)
   getRunningProcesses?: () => Array<{ pid: number; ppid: number; name: string }>;
-  // SCK exclusion: applies CGS window tag for ScreenCaptureKit exclusion on macOS 15+
+  // EXPERIMENTAL — gated behind NATIVELY_TRY_SCK_TAG=1.
+  // Writes the private `CGSSetWindowTags` bit (1 << 3) that internal Apple
+  // code is believed to use for ScreenCaptureKit exclusion on macOS 15+.
+  // The bit constant is reverse-engineered, undocumented, and may shift
+  // between macOS releases. Default flow uses `setContentProtection` (Layer
+  // 0) + the private CGS SPI `CGSSetWindowSharingState` (via
+  // applyMacosPrivateWindowStealth) which is the documented internal call
+  // path used by `[NSWindow setSharingType:]` itself.
   applySckExclusion?: (windowNumber: number) => void;
-  // SCK exclusion verification: returns true if the SCK exclusion tag is set on the window
+  // EXPERIMENTAL — gated behind NATIVELY_TRY_SCK_TAG=1.
+  // Read-back of the same private CGS tag bit. Only confirms the bit was
+  // written, not that ScreenCaptureKit actually respects it.
   verifySckExclusion?: (windowNumber: number) => boolean;
+  // EXPERIMENTAL — gated behind NATIVELY_TRY_SCK_TAG=1.
+  // Wraps `[NSWindow setSharingType:.none]` + the same `CGSSetWindowTags`
+  // bit in one native call. The first half is the documented capture
+  // exclusion API (also what Electron's `setContentProtection(true)` and
+  // Tauri's `content_protected(true)` call). The second half is the
+  // experimental bit. Default flow does NOT call this — Layer 0 already
+  // covers the documented path.
+  excludeFromCapture?: (windowNumber: number) => void;
 }
 
 export interface StealthFeatureFlags {
@@ -563,7 +580,7 @@ export class StealthManager extends EventEmitter {
         : record.allowVirtualDisplayIsolation;
 
       this.applyLayer0(win, true);
-      // SCK exclusion layer: exclude window from ScreenCaptureKit enumeration on macOS 15+
+      // EXPERIMENTAL: gated behind NATIVELY_TRY_SCK_TAG=1. No-op by default.
       this.applySckExclusion(win);
       this.applyUiHardening(win, record.hideFromSwitcher);
       this.applyNativeStealth(win);
@@ -847,6 +864,33 @@ export class StealthManager extends EventEmitter {
     return isOptimizationActive('useStealthMode');
   }
 
+  /**
+   * Whether the experimental SCK CGS tag path is enabled.
+   *
+   * Default OFF. Opt in via `NATIVELY_TRY_SCK_TAG=1`.
+   *
+   * The bit (1 << 3 in `CGSSetWindowTags`) is reverse-engineered from
+   * the WindowServer's internal handling of `setSharingType:.none` on
+   * macOS 15+. It's undocumented, may shift between releases, and writing
+   * it does not give us proof that ScreenCaptureKit honours it (the
+   * read-back via `verifySckExclusion` only confirms our own write —
+   * which on macOS 26 returns `false` even after a successful write,
+   * causing the enforcement loop to spin endlessly with "SCK exclusion
+   * lost" warnings).
+   *
+   * Earlier wiring auto-enabled this when Acceleration Mode was on —
+   * removed because the false-negative loop produces nothing useful on
+   * macOS 15+. The bit remains exposed for explicit experimentation.
+   *
+   * Default flow uses `setContentProtection` (which calls
+   * `[NSWindow setSharingType:.none]`) plus the documented private CGS SPI
+   * `CGSSetWindowSharingState` (via `applyMacosPrivateWindowStealth`).
+   * That's the same primitive Apple, Tauri, and Electron use.
+   */
+  private isSckTagExperimentEnabled(): boolean {
+    return process.env.NATIVELY_TRY_SCK_TAG === '1';
+  }
+
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {
     // setContentProtection on macOS sets NSWindow.sharingType = .none.
     //   - Pre-15: hides window from ALL screen capture (CGS + ScreenCaptureKit).
@@ -877,6 +921,19 @@ export class StealthManager extends EventEmitter {
       this.clearWarning('content_protection_failed');
     }
 
+    // EXPERIMENTAL (NATIVELY_TRY_SCK_TAG=1): also write the
+    // reverse-engineered CGS tag bit on macOS 15+. Default flow does NOT
+    // call this — `setContentProtection` already hits
+    // `[NSWindow setSharingType:.none]` (the documented capture-exclusion
+    // primitive that Electron, Tauri, and Apple's own AppKit use), and
+    // `applyMacosPrivateWindowStealth` covers windows that aren't in
+    // `[NSApp windows]` via the documented private SPI
+    // `CGSSetWindowSharingState`. The CGS tag bit is undocumented and we
+    // have no reliable read-back that confirms ScreenCaptureKit honours it.
+    if (this.platform === 'darwin' && enable) {
+      this.applyNativeExcludeFromCapture(win);
+    }
+
     // Track Layer-0 application on the window record so verifyStealth can
     // confirm protection without relying on a non-existent
     // setExcludeFromCapture API. We treat a successful setContentProtection
@@ -890,6 +947,57 @@ export class StealthManager extends EventEmitter {
     } else {
       this.clearWarning('electron_capture_exclusion_failed');
       this.clearWarning('electron_capture_exclusion_unavailable');
+    }
+  }
+
+  /**
+   * EXPERIMENTAL: Wrapper around the native `excludeFromCapture` call which
+   * performs `[NSWindow setSharingType:.none]` and writes the
+   * reverse-engineered CGS tag bit in one shot.
+   *
+   * Gated behind `NATIVELY_TRY_SCK_TAG=1`. Default behaviour is a no-op —
+   * `applyLayer0` already calls Electron's `setContentProtection(true)`
+   * which performs the same `setSharingType:.none` work, and
+   * `applyMacosPrivateWindowStealth` covers the private-SPI fallback for
+   * NSPanel windows that aren't in `[NSApp windows]`.
+   *
+   * For NSPanel windows, getMediaSourceId() may not be immediately
+   * available after construction. If the window number cannot be resolved,
+   * we schedule a deferred retry to catch it once the window is fully
+   * registered with the window server.
+   */
+  private applyNativeExcludeFromCapture(win: StealthCapableWindow, retryCount: number = 0): void {
+    if (!this.isSckTagExperimentEnabled()) {
+      return;
+    }
+    const nativeModule = this.getNativeModule();
+    if (!nativeModule?.excludeFromCapture) {
+      return;
+    }
+    const windowNumber = this.getMacosWindowNumber(win);
+    if (windowNumber === null) {
+      // NSPanel windows may not have a mediaSourceId immediately after creation.
+      // Retry up to 3 times with increasing delay to catch the window once
+      // it's fully registered with the window server.
+      if (retryCount < 3 && !isWindowDestroyed(win)) {
+        const delay = (retryCount + 1) * 50; // 50ms, 100ms, 150ms
+        this.timeoutScheduler(() => {
+          if (!isWindowDestroyed(win) && this.isEnabled()) {
+            this.applyNativeExcludeFromCapture(win, retryCount + 1);
+          }
+        }, delay);
+      } else {
+        this.logger.warn('[StealthManager] applyNativeExcludeFromCapture: unable to resolve window number after retries');
+        this.addWarning('native_exclude_from_capture_failed');
+      }
+      return;
+    }
+    try {
+      nativeModule.excludeFromCapture(windowNumber);
+      this.clearWarning('native_exclude_from_capture_failed');
+    } catch (error) {
+      this.logger.warn('[StealthManager] native excludeFromCapture failed:', error);
+      this.addWarning('native_exclude_from_capture_failed');
     }
   }
 
@@ -925,14 +1033,6 @@ export class StealthManager extends EventEmitter {
 
   private applyNativeStealth(win: StealthCapableWindow): void {
     const record = this.managedWindowLookup.get(win as object);
-    if (this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0')) {
-      if (record) {
-        record.privateMacosStealthApplied = false;
-      }
-      this.logger.log('[StealthManager] macOS 15+ — native window stealth skipped while stronger isolation is applied separately');
-      return;
-    }
-
     const nativeModule = this.getNativeModule();
     if (!nativeModule) {
       if (record) {
@@ -951,48 +1051,45 @@ export class StealthManager extends EventEmitter {
         return;
       }
 
-        if (this.platform === 'darwin') {
+      if (this.platform === 'darwin') {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           if (record) {
             record.privateMacosStealthApplied = false;
           }
 
-          // On macOS 15+ (Sequoia), CGSSetWindowSharingState(kCGSDoNotShare)
-          // hides the window entirely from the user — not just from screen
-          // capture. Skip the native CGS path and rely on:
-          //   * Layer 0  — Electron's setContentProtection (NSWindowSharingNone)
-          //   * Layer 3  — virtual-display isolation, when armed via the
-          //                native presenter, for ScreenCaptureKit-based
-          //                screen-share apps that bypass NSWindowSharingNone.
+          // RESTORED FROM `mac` BRANCH: run NSWindow setSharingType: + CGS
+          // SPI on every macOS version, including 15+. The native module's
+          // private CGS path (applyMacosPrivateWindowStealth) operates
+          // directly on the window number, so it works for NSPanel /
+          // utility windows that may be missing from `[NSApp windows]`.
           //
-          // The native Rust module also guards this, but the TS-side guard
-          // avoids even touching the native code path on incompatible systems.
-          const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
-
-          if (!isMacOS15Plus) {
-            if (nativeModule.applyMacosWindowStealth) {
+          // Earlier slopcode commits skipped this on macOS 15+ blaming a
+          // black-screen bug. Root cause was the renderer-side
+          // PrivacyShield ramp, not these calls — the mac branch ships
+          // this exact code on 15+ without issue. Skipping it removed
+          // SCK invisibility on Sequoia / Sonoma+.
+          if (nativeModule.applyMacosWindowStealth) {
+            try {
               nativeModule.applyMacosWindowStealth(windowNumber);
+            } catch (publicError) {
+              this.logger.warn('[StealthManager] applyMacosWindowStealth failed:', publicError);
             }
+          }
 
-            if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
-              try {
-                nativeModule.applyMacosPrivateWindowStealth(windowNumber);
-                if (record) {
-                  record.privateMacosStealthApplied = true;
-                }
-              } catch (privateError) {
-                this.logger.warn('[StealthManager] macOS private stealth failed:', privateError);
-                this.addWarning('private_api_failed');
+          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
+            try {
+              nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+              if (record) {
+                record.privateMacosStealthApplied = true;
               }
+            } catch (privateError) {
+              this.logger.warn('[StealthManager] macOS private stealth failed:', privateError);
+              this.addWarning('private_api_failed');
             }
-          } else {
-            this.logger.log('[StealthManager] macOS 15+ — native window stealth skipped while stronger isolation is applied separately');
           }
 
-          if (!isMacOS15Plus) {
-            this.verifyStealth(win);
-          }
+          this.verifyStealth(win);
         }
       }
     } catch (error) {
@@ -1002,15 +1099,24 @@ export class StealthManager extends EventEmitter {
   }
 
   /**
-   * Apply SCK (ScreenCaptureKit) exclusion tag to a window on macOS 15+.
-   * This sets the CGS window tag that excludes the window from SCK enumeration,
-   * preventing ScreenCaptureKit-based apps (Zoom, Meet, OBS, browser getDisplayMedia)
-   * from seeing the window.
+   * EXPERIMENTAL: Apply the reverse-engineered SCK exclusion tag bit
+   * (`CGSSetWindowTags(1 << 3)`) to a window on macOS 15+.
    *
-   * Gracefully degrades: logs a warning on failure but does not throw.
-   * No-op on macOS < 15 or non-darwin platforms.
+   * Gated behind `NATIVELY_TRY_SCK_TAG=1`. Default behaviour is a no-op —
+   * Layer 0 (`setContentProtection`) plus the private CGS SPI
+   * `CGSSetWindowSharingState` (via `applyMacosPrivateWindowStealth`)
+   * already cover the documented capture-exclusion path that
+   * `[NSWindow setSharingType:.none]` exposes. The CGS tag bit is
+   * undocumented and we have no reliable way to confirm SCK honours it
+   * separately from `sharingType`, so we keep this opt-in.
+   *
+   * For NSPanel windows (type:'panel'), the window number may not be
+   * immediately available. Retries up to 3 times with backoff.
    */
-  private applySckExclusion(win: StealthCapableWindow): void {
+  private applySckExclusion(win: StealthCapableWindow, retryCount: number = 0): void {
+    if (!this.isSckTagExperimentEnabled()) {
+      return;
+    }
     if (this.platform !== 'darwin' || !this.isMacOSVersionCompatible('15.0')) {
       return;
     }
@@ -1022,6 +1128,19 @@ export class StealthManager extends EventEmitter {
 
     const windowNumber = this.getMacosWindowNumber(win);
     if (windowNumber === null) {
+      // NSPanel windows may not have a mediaSourceId immediately after creation.
+      // Retry with backoff to catch the window once registered with the window server.
+      if (retryCount < 3 && !isWindowDestroyed(win)) {
+        const delay = (retryCount + 1) * 50; // 50ms, 100ms, 150ms
+        this.timeoutScheduler(() => {
+          if (!isWindowDestroyed(win) && this.isEnabled()) {
+            this.applySckExclusion(win, retryCount + 1);
+          }
+        }, delay);
+      } else {
+        this.logger.warn('[StealthManager] applySckExclusion: unable to resolve window number after retries');
+        this.addWarning('sck_exclusion_failed');
+      }
       return;
     }
 
@@ -1043,9 +1162,6 @@ export class StealthManager extends EventEmitter {
     if (record) {
       record.privateMacosStealthApplied = false;
     }
-    if (this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0')) {
-      return;
-    }
 
     const nativeModule = this.getNativeModule();
     if (!nativeModule) {
@@ -1064,15 +1180,24 @@ export class StealthManager extends EventEmitter {
       if (this.platform === 'darwin') {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
-          const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
-
-          if (!isMacOS15Plus) {
-            if (nativeModule.removeMacosWindowStealth) {
+          // RESTORED FROM `mac` BRANCH: pair every applyMacos*Stealth with
+          // a removeMacos*Stealth on disable, including macOS 15+. Leaving
+          // the sharing state pinned after stealth is toggled off would
+          // keep the window hidden from screen-share even when the user
+          // disabled stealth.
+          if (nativeModule.removeMacosWindowStealth) {
+            try {
               nativeModule.removeMacosWindowStealth(windowNumber);
+            } catch (publicError) {
+              this.logger.warn('[StealthManager] removeMacosWindowStealth failed:', publicError);
             }
+          }
 
-            if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.removeMacosPrivateWindowStealth) {
+          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.removeMacosPrivateWindowStealth) {
+            try {
               nativeModule.removeMacosPrivateWindowStealth(windowNumber);
+            } catch (privateError) {
+              this.logger.warn('[StealthManager] removeMacosPrivateWindowStealth failed:', privateError);
             }
           }
         }
@@ -1098,10 +1223,33 @@ export class StealthManager extends EventEmitter {
   }
 
   private ensureVirtualDisplayIsolation(record: ManagedWindowRecord): void {
+    // Virtual-display isolation is the strongest mac capture-exclusion
+    // layer (Layer 3 — moves the window content to an off-screen virtual
+    // display the user can still interact with but ScreenCaptureKit cannot
+    // enumerate). It pairs with Layers 0–2 (`setContentProtection`,
+    // `applyMacosWindowStealth`, `applyMacosPrivateWindowStealth`) and
+    // closes the gap on macOS 15+ where SCK-based capture can otherwise
+    // bypass `setSharingType:.none` for some privileged callers.
+    //
+    // Gate ONLY on:
+    //   • platform = darwin
+    //   • feature flag `enableVirtualDisplayIsolation` (defaults true on
+    //     non-MAS darwin in AppState)
+    //   • a coordinator instance (wired automatically when the flag is on)
+    //   • the per-window opt-in `allowVirtualDisplayIsolation` (every
+    //     window-creation site sets this to true today)
+    //   • not already started for this record
+    //
+    // Decoupled from `isEnhancedStealthEnabled()` (the master Acceleration
+    // Mode toggle) so Layer 3 runs proactively for every user with stealth
+    // enabled, not just users who flip Acceleration Mode on. Other enhanced
+    // monitors (watchdog, SCStream / CGWindow / Chromium detection,
+    // opacity flicker) intentionally stay gated by Acceleration Mode —
+    // they are optimization-mode features. Virtual display is invisibility,
+    // not optimization.
     if (
       this.platform !== 'darwin' ||
       !this.featureFlags.enableVirtualDisplayIsolation ||
-      !this.isEnhancedStealthEnabled() ||
       !this.virtualDisplayCoordinator ||
       !record.allowVirtualDisplayIsolation ||
       record.virtualDisplayIsolationStarted
@@ -1713,7 +1861,14 @@ export class StealthManager extends EventEmitter {
       this.cgWindowMonitorHandle ||
       !this.isEnabled() ||
       !this.isEnhancedStealthEnabled() ||
-      this.platform !== 'darwin'
+      this.platform !== 'darwin' ||
+      // macOS 15+: CGWindowListCopyWindowInfo reports stale sharingState
+      // values (> 0) even after setSharingType:.none is applied. This
+      // causes false-positive "Window N is visible to capture tools"
+      // detections that trigger emergency protection (hiding the window
+      // mid-session). Disable the monitor on 15+ — Layer 0/1/2/3 handle
+      // capture exclusion without needing this self-check.
+      this.isMacOSVersionCompatible('15.0')
     ) {
       return;
     }
@@ -2093,17 +2248,48 @@ for window in windows:
     const record = this.managedWindowLookup.get(win as object);
     const isMacOS15Plus = this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0');
     if (isMacOS15Plus && record?.excludeFromCaptureApplied) {
-      // On macOS 15+, Layer 0 alone is not enough for the product invariant:
-      // ScreenCaptureKit-based apps can still capture windows unless the
-      // native SCK exclusion tag verifies or the virtual-display isolation
-      // path is armed and ready.
+      // macOS 15+ verification: `setContentProtection(true)` (Layer 0)
+      // hits `[NSWindow setSharingType:.none]` — the documented capture
+      // exclusion API. That's the same primitive Pluely / Tauri /
+      // Electron / Apple's own AppKit use. It is NOT an absolute
+      // guarantee on macOS 15+: privileged callers (QuickTime, some
+      // conferencing apps with private entitlements) can still capture
+      // regardless. We accept any of these signals as proof of capture
+      // exclusion against the public capture path:
+      //   1. The private CGS SPI path (`CGSSetWindowSharingState` via
+      //      `applyMacosPrivateWindowStealth`) was applied successfully.
+      //      This is the documented internal call AppKit uses for
+      //      `setSharingType:` and works on the window number directly,
+      //      so it covers NSPanel / utility windows that aren't in
+      //      `[NSApp windows]`. This is the mac-branch parity path.
+      //   2. EXPERIMENTAL: the reverse-engineered CGS tag bit is set
+      //      (via `verifySckExclusion`). Only meaningful when
+      //      NATIVELY_TRY_SCK_TAG=1 is active. The read-back only
+      //      confirms our own write, not SCK behaviour.
+      //   3. Layer 3 virtual-display isolation is ready.
+      //   4. EXPERIMENTAL: the native `excludeFromCapture` call succeeded
+      //      (combines `setSharingType:` with the CGS tag bit). Same
+      //      caveats as #2.
+      const privateMacosVerified = Boolean(
+        this.featureFlags.enablePrivateMacosStealthApi &&
+        record.privateMacosStealthApplied
+      );
       const virtualDisplayVerified = Boolean(
         this.featureFlags.enableVirtualDisplayIsolation &&
         record.allowVirtualDisplayIsolation &&
         record.virtualDisplayIsolationReady
       );
       const sckExclusionVerified = this.verifySckExclusionForWindow(win);
-      const macos15ProtectionVerified = sckExclusionVerified || virtualDisplayVerified;
+      const nativeExcludeAvailable = Boolean(this.getNativeModule()?.excludeFromCapture);
+      const nativeExcludeAppliedSuccessfully = nativeExcludeAvailable
+        && this.isSckTagExperimentEnabled()
+        && record.excludeFromCaptureApplied
+        && !this.stealthDegradationWarnings.has('native_exclude_from_capture_failed');
+      const macos15ProtectionVerified =
+        privateMacosVerified
+        || sckExclusionVerified
+        || virtualDisplayVerified
+        || nativeExcludeAppliedSuccessfully;
       if (!macos15ProtectionVerified) {
         if (this.isEnabled()) {
           const addedVirtualDisplayWarning = this.addWarning('virtual_display_required');

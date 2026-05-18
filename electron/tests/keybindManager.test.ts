@@ -40,13 +40,15 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.deepEqual(shortcut?.alternateAccelerators, ['Command+Alt+Shift+M', 'Command+Shift+/']);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.accelerator, 'Command+Alt+Shift+V');
-    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['Command+B', 'F13']);
+    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['Command+B', 'CommandOrControl+Shift+Space', 'F13']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.accelerator, 'Command+Alt+Shift+S');
-    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.alternateAccelerators, ['F14', 'Command+Shift+S']);
+    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.alternateAccelerators, ['F14', 'CommandOrControl+Shift+S', 'CommandOrControl+Shift+\\']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.accelerator, 'Command+Alt+Shift+A');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.alternateAccelerators, ['F15']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:restore-full-stealth')?.accelerator, 'Shift+Esc');
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:restore-full-stealth')?.isGlobal, true);
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-cursor-hook')?.accelerator, 'CommandOrControl+Shift+-');
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-cursor-hook')?.isGlobal, true);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.accelerator, 'Command+Up');
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.isGlobal, true);
@@ -65,6 +67,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
       'general:selective-screenshot',
       'general:take-screenshot',
       'general:toggle-clickthrough',
+      'general:toggle-cursor-hook',
       'general:toggle-visibility',
     ]);
 
@@ -76,10 +79,12 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
 
     assert.ok(registered.includes('Command+Alt+Shift+V'));
     assert.ok(registered.includes('Command+B'));
+    assert.ok(registered.includes('CommandOrControl+Shift+Space'));
     assert.ok(registered.includes('F13'));
     assert.ok(registered.includes('Command+Alt+Shift+S'));
     assert.ok(registered.includes('F14'));
-    assert.ok(registered.includes('Command+Shift+S'));
+    assert.ok(registered.includes('CommandOrControl+Shift+S'));
+    assert.ok(registered.includes('CommandOrControl+Shift+\\'));
     assert.ok(registered.includes('Command+Alt+Shift+A'));
     assert.ok(registered.includes('F15'));
     assert.ok(registered.includes('Shift+Esc'));
@@ -89,6 +94,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.ok(registered.includes('Command+Up'));
     assert.ok(registered.includes('Command+Down'));
     assert.ok(registered.includes('CommandOrControl+Enter'));
+    assert.ok(registered.includes('CommandOrControl+Shift+-'));
   } finally {
     (Module as any)._load = originalLoad;
   }

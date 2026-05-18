@@ -313,6 +313,12 @@ this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
   virtualDisplayCoordinator: this.virtualDisplayCoordinator ?? undefined,
 })
 this.windowHelper = new WindowHelper(this, this.stealthManager)
+// StealthManager is constructed synchronously and the native module is
+// resolved lazily inside it. The `stealthReadyPromise` gate in WindowHelper
+// is here to prevent windows from being shown before native stealth is
+// available; signal it now so window creation doesn't sit on a 5s timeout
+// every boot.
+this.windowHelper.markStealthReady()
 this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
 this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManager)
 
@@ -500,9 +506,12 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
 this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
-if (this.isUndetectable) {
-  this.setContainmentActive(true, 'protected_startup')
-}
+// NOTE: Startup containment removed. The window is born with Layer 0
+// protection applied synchronously (createDirectWindow → applyInitialStealth)
+// and markStealthReady resolves immediately. The old `protected_startup`
+// containment blocked model-set IPC calls and caused "CONTAINMENT_ACTIVE"
+// errors on every boot, preventing the renderer from configuring providers.
+// Stealth protection is already active before any content is shown.
 this.syncPrivacyShieldState()
 
 // Initialize Checkpointer
@@ -677,32 +686,16 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       logger: { log: console.log, warn: console.warn, error: console.error },
       nativeBridge: this.nativeStealthBridge ?? undefined,
         requireNativeStealth: () => (isEnvFlagEnabled(process.env.NATIVELY_REQUIRE_NATIVE_STEALTH) ?? false) && Boolean(this.nativeStealthBridge),
-        nativeArmGuard: async () => {
-          if (!(isEnvFlagEnabled(process.env.NATIVELY_ENABLE_NATIVE_STEALTH_PRESENTER) ?? false)) {
-            return {
-              allowed: false,
-              reason: 'native-presenter-disabled',
-            }
-          }
-
-          try {
-            const snapshot = await detectExternalScreenShare()
-            if (!snapshot.active) {
-              return { allowed: true }
-            }
-
-            return {
-              allowed: false,
-              reason: snapshot.reason,
-            }
-          } catch (error) {
-            console.warn('[Stealth] Screen-share detection failed; skipping interruptive native helper arm:', error)
-            return {
-              allowed: false,
-              reason: 'screen-share-detection-unavailable',
-            }
-          }
-        },
+        // RESTORED FROM `mac` BRANCH: no nativeArmGuard. The slopcode-era
+        // guard refused to arm Layer 3 (virtual-display isolation) when an
+        // external screen-share was active OR when
+        // NATIVELY_ENABLE_NATIVE_STEALTH_PRESENTER was unset (default off).
+        // That meant the only layer that actually defeats SCK on macOS 15+
+        // was dormant by default — and refused to engage in exactly the
+        // scenario it was designed for (screen-share active). The mac
+        // branch ships the native bridge unconditionally; mirroring that
+        // behaviour here lets Layer 3 arm whenever the bridge is present.
+        nativeArmGuard: undefined,
         runtimeHeartbeatStalenessMs: (process.platform !== 'darwin' || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === '1') ? 2000 : 0,
       },
     ))

@@ -78,13 +78,15 @@ mod macos {
 const K_CGS_DO_NOT_SHARE: i32 = 0;
 const K_CGS_NORMAL_SHARE: i32 = 1;
 
-/// On macOS 15+ (Sequoia), both NSWindow.setSharingType: and
-/// CGSSetWindowSharingState(kCGSDoNotShare) hide the window completely
-/// from the user — not just from screen capture.  On these systems
-/// native stealth is a no-op; Electron's setContentProtection (Layer 0)
-/// uses ScreenCaptureKit which is the correct modern API.
+/// On macOS 15+ (Sequoia / Sonoma+), Apple's documented mechanism for
+/// excluding a window from ScreenCaptureKit is `NSWindow.sharingType =
+/// .none`. The mac branch ships this on every macOS version without
+/// black-screen issues — earlier slopcode reports of "black screen on
+/// 15+" came from a renderer-side PrivacyShield ramp, not this API.
 ///
-/// We never call setSharingType: on any macOS version — it is dead code.
+/// We use the version probe to gate Layer-2 (CGS tag) only; Layer-1
+/// (setSharingType:) and Layer-3 (CGSSetWindowSharingState) run on every
+/// version.
 fn is_macos_15_or_later() -> bool {
     unsafe {
         let mut buf = [0i8; 32];
@@ -106,8 +108,8 @@ fn is_macos_15_or_later() -> bool {
     }
 }
 
-/// NSWindow is needed only for set_level and find_window.
-/// sharingType / setSharingType: are never touched.
+/// NSWindow extension traits. `setSharingType:` is the canonical
+/// capture-exclusion API on every macOS version (incl. 15+).
 trait NSAppWindowsExt {
     fn windows(&self) -> &ns::Array<ns::Window>;
 }
@@ -121,9 +123,16 @@ impl NSAppWindowsExt for ns::App {
 // SCK Capture Exclusion — CGSSetWindowTags approach for macOS 15+
 // ============================================================================
 
-/// The CGS window tag bit that excludes a window from ScreenCaptureKit
-/// enumeration. This is the tag used internally by `NSWindow.sharingType = .none`
-/// on macOS 15+ to prevent SCK from listing the window.
+/// EXPERIMENTAL: The CGS window tag bit reverse-engineered as the
+/// ScreenCaptureKit exclusion flag on macOS 15+. The semantics of this
+/// bit are undocumented, may shift between macOS releases, and writing
+/// it has no observable effect we can verify externally — the read-back
+/// via `CGSGetWindowTags` only confirms our own write, not SCK
+/// behaviour. The default capture-exclusion path uses
+/// `[NSWindow setSharingType:.none]` (via Electron's
+/// `setContentProtection`) and the documented private CGS SPI
+/// `CGSSetWindowSharingState`. This bit is exposed for experimentation
+/// only and is gated on the TypeScript side behind `NATIVELY_TRY_SCK_TAG=1`.
 const CGS_TAG_EXCLUDE_FROM_CAPTURE: u32 = 1 << 3; // bit 3 = 0x08
 
 /// NSWindowSharingNone — maps to `NSWindow.sharingType = .none`.
@@ -143,6 +152,15 @@ extern "C" {
         tags: *mut u32,
         tag_size: u32,
     ) -> i32;
+    /// Private CGS SPI: directly toggle the window's sharing state by
+    /// window number. Equivalent to `[NSWindow setSharingType:]` but works
+    /// for windows (NSPanel, utility windows) that are missing from
+    /// `[NSApp windows]`. Restored from the `mac` branch native module.
+    fn CGSSetWindowSharingState(
+        connection: i32,
+        window_id: i32,
+        state: i32,
+    ) -> i32;
 }
 
 /// Trait extension to call `setSharingType:` on NSWindow via Objective-C message send.
@@ -155,27 +173,48 @@ impl NSWindowSharingExt for ns::Window {
     fn set_sharing_type(&mut self, sharing_type: u64);
 }
 
-/// Exclude a window from ScreenCaptureKit capture enumeration.
+/// EXPERIMENTAL: Combine `[NSWindow setSharingType:.none]` with the
+/// reverse-engineered `CGSSetWindowTags` bit.
 ///
-/// This combines two approaches:
-/// 1. Sets `NSWindow.sharingType = .none` which is the standard content
-///    protection mechanism (equivalent to Electron's `setContentProtection`).
-/// 2. On macOS 15+, additionally applies `CGSSetWindowTags` with the
-///    capture exclusion tag to ensure the window is omitted from SCK's
-///    `SCShareableContent.windows` enumeration.
+/// The first half is the same documented capture-exclusion API that
+/// Electron's `setContentProtection(true)`, Tauri's `content_protected(true)`,
+/// and Apple's own AppKit funnel through. The second half writes an
+/// undocumented CGS tag whose effect on ScreenCaptureKit cannot be
+/// verified externally.
 ///
-/// This function is safe to call on any macOS version — on older systems
-/// only the sharingType approach is used.
+/// Default code paths do NOT call this — they call
+/// `[NSWindow setSharingType:.none]` directly via Electron's API and use
+/// `apply_private` (private CGS SPI `CGSSetWindowSharingState`) for
+/// NSPanel / utility windows that don't appear in `[NSApp windows]`.
+///
+/// Exposed for experimentation; gated on the TypeScript side behind
+/// `NATIVELY_TRY_SCK_TAG=1`.
 pub fn exclude_from_capture(window_number: u32) -> napi::Result<()> {
-    let mut window = find_window_or_err(window_number)?;
-
     // Layer 1: Set NSWindow.sharingType = .none
     // This tells the window server the window should not be shared/captured.
-    window.set_sharing_type(NS_WINDOW_SHARING_NONE);
+    // NOTE: NSPanel windows (type:'panel' in Electron) may not appear in
+    // [NSApp windows] enumeration. We attempt the lookup but do NOT bail
+    // if it fails — the CGS tag (Layer 2) is the critical path for SCK
+    // invisibility on macOS 15+ and operates on the window number directly
+    // without needing the NSWindow object.
+    let sharing_type_applied = match find_window(window_number) {
+        Some(mut window) => {
+            window.set_sharing_type(NS_WINDOW_SHARING_NONE);
+            true
+        }
+        None => {
+            // NSPanel / utility windows may not be in [NSApp windows].
+            // This is expected for overlay panels — proceed to CGS tag.
+            false
+        }
+    };
 
     // Layer 2: On macOS 15+, apply CGS window tag for SCK exclusion.
     // This ensures ScreenCaptureKit does not enumerate the window even
     // when apps use the modern SCShareableContent API.
+    // CRITICAL: This is the primary mechanism for hiding from screen-share
+    // apps (Zoom, Meet, Teams, OBS, browser getDisplayMedia). It operates
+    // directly on the CGS window ID and does NOT require the NSWindow object.
     if is_macos_15_or_later() {
         unsafe {
             let connection = CGSMainConnectionID();
@@ -193,20 +232,28 @@ pub fn exclude_from_capture(window_number: u32) -> napi::Result<()> {
                 )));
             }
         }
+    } else if !sharing_type_applied {
+        // On macOS < 15, sharingType is the ONLY mechanism. If we couldn't
+        // find the window to set it, that's a real failure.
+        return Err(napi::Error::from_reason(format!(
+            "macOS window not found for window number {} — cannot apply sharingType on pre-15 macOS",
+            window_number
+        )));
     }
 
     Ok(())
 }
 
-/// Apply ONLY the CGS window tag for ScreenCaptureKit exclusion.
+/// EXPERIMENTAL: Apply ONLY the reverse-engineered CGS tag bit
+/// (`CGSSetWindowTags(1 << 3)`).
 ///
-/// Unlike `exclude_from_capture` which combines sharingType + CGS tags,
-/// this function is a focused, single-purpose function that ONLY applies
-/// the `CGSSetWindowTags` with `kCGSExcludeFromCapture` tag.
+/// Unlike `exclude_from_capture`, this does NOT call
+/// `[NSWindow setSharingType:.none]` — it touches only the experimental
+/// CGS bit. The bit is undocumented, its semantics may shift between
+/// macOS releases, and writing it has no externally verifiable effect.
 ///
 /// On macOS < 15, this is a graceful no-op (returns Ok(())).
-/// On macOS 15+, it applies the CGS tag to exclude the window from
-/// SCK's `SCShareableContent.windows` enumeration.
+/// Gated on the TypeScript side behind `NATIVELY_TRY_SCK_TAG=1`.
 pub fn apply_sck_exclusion(window_number: u32) -> napi::Result<()> {
     if !is_macos_15_or_later() {
         // Graceful no-op on older systems — SCK exclusion via CGS tags
@@ -234,18 +281,14 @@ pub fn apply_sck_exclusion(window_number: u32) -> napi::Result<()> {
     Ok(())
 }
 
-/// Verify that the SCK exclusion tag is set on a window.
+/// EXPERIMENTAL: Verify whether the reverse-engineered CGS tag bit is
+/// set on a window. Read-back of `CGSGetWindowTags`. ONLY confirms that
+/// our own write reached the WindowServer — does NOT prove
+/// ScreenCaptureKit honours the bit.
 ///
-/// Uses `CGSGetWindowTags` to read the current window tags and checks
-/// whether the `CGS_TAG_EXCLUDE_FROM_CAPTURE` bit is set. This is a
-/// reliable proxy for SCK exclusion — if the tag is set, ScreenCaptureKit
-/// will not enumerate the window in `SCShareableContent.windows`.
-///
-/// Returns `true` if the window is properly excluded (tag is set),
-/// `false` if the tag is NOT set (window is visible to SCK).
-///
-/// On macOS < 15, always returns `true` since SCK exclusion via CGS tags
-/// is only relevant on macOS 15+ (older systems use different mechanisms).
+/// On macOS < 15, always returns `true` (the legacy capture-exclusion
+/// mechanisms apply unconditionally and this verifier is a no-op).
+/// Gated on the TypeScript side behind `NATIVELY_TRY_SCK_TAG=1`.
 pub fn verify_sck_exclusion(window_number: u32) -> napi::Result<bool> {
     if !is_macos_15_or_later() {
         // On older macOS, SCK tag-based exclusion is not used — consider
@@ -272,32 +315,49 @@ pub fn verify_sck_exclusion(window_number: u32) -> napi::Result<bool> {
     }
 }
 
-/// Apply stealth.  On macOS < 15 uses CGSSetWindowSharingState(kCGSDoNotShare).
-/// On macOS 15+ this is a no-op — the CGS call hides the window from the user
-/// on Sequoia.  Electron's setContentProtection (Layer 0) covers screen capture.
+/// Apply stealth via NSWindow.setSharingType: = .none.
+///
+/// Restored from the `mac` branch (see commit history). On macOS 15+
+/// (Sequoia / Sonoma+), Apple's documented capture-exclusion mechanism is
+/// `NSWindow.sharingType = .none`. This call hides the window from
+/// ScreenCaptureKit-based capture without making the window invisible to
+/// the local user — that earlier "black screen on macOS 15+" report was a
+/// renderer-side PrivacyShield artifact, not a side-effect of this API.
+///
+/// For NSPanel windows that may not appear in `[NSApp windows]`, we
+/// gracefully skip the NSWindow path and leave the CGS path
+/// (`apply_private`) to do the work.
 pub fn apply(window_number: u32) -> napi::Result<()> {
-    if is_macos_15_or_later() {
+    if let Some(mut window) = find_window(window_number) {
+        window.set_sharing_type(NS_WINDOW_SHARING_NONE);
         return Ok(());
     }
-    apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
+    // NSPanel / utility windows may not be enumerable through [NSApp windows].
+    // Caller should also invoke `apply_private` which uses CGS by window number.
+    Ok(())
 }
 
-/// Remove stealth.
+/// Remove stealth via NSWindow.setSharingType: = .readOnly (default).
 pub fn remove(window_number: u32) -> napi::Result<()> {
-    if is_macos_15_or_later() {
-        return Ok(());
+    const NS_WINDOW_SHARING_READ_ONLY: u64 = 1;
+    if let Some(mut window) = find_window(window_number) {
+        window.set_sharing_type(NS_WINDOW_SHARING_READ_ONLY);
     }
-    apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
+    Ok(())
 }
 
-/// Apply stealth via the private CGS SPI only.
+/// Apply stealth via the private CGS SPI (CGSSetWindowSharingState).
+///
+/// Restored from the `mac` branch. Operates directly on the window number
+/// via the CoreGraphics private SPI, so it works for NSPanel / utility
+/// windows that aren't in `[NSApp windows]`.
 pub fn apply_private(window_number: u32) -> napi::Result<()> {
-    apply(window_number)
+    apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
 }
 
 /// Remove stealth via the private CGS SPI only.
 pub fn remove_private(window_number: u32) -> napi::Result<()> {
-    remove(window_number)
+    apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
 }
 
 pub fn set_level(window_number: u32, level: i32) -> napi::Result<()> {
@@ -365,15 +425,34 @@ pub fn verify_capture_exclusion(window_number: u32) -> napi::Result<bool> {
         })
     }
 
-    fn apply_cgs(_window_number: u32, _sharing_state: i32, _operation: &str) -> napi::Result<()> {
-        // COMPLETELY DISABLED on macOS 15+ (and all versions for safety).
+    fn apply_cgs(window_number: u32, sharing_state: i32, operation: &str) -> napi::Result<()> {
+        // Restored from `mac` branch. Calls the private CGS SPI
+        // `CGSSetWindowSharingState` to toggle a window's capture
+        // exclusion state by window number — works for NSPanel and other
+        // windows that may not be enumerable through [NSApp windows].
         //
-        // On macOS 15+ (Sequoia), both NSWindow.setSharingType: and
-        // CGSSetWindowSharingState(kCGSDoNotShare) hide the window completely
-        // from the user — not just from screen capture.
-        //
-        // The app relies solely on Electron's setContentProtection (Layer 0)
-        // which uses the modern ScreenCaptureKit API.
+        // The earlier slopcode comment claimed this hid the window from
+        // the user on macOS 15+. That was a misdiagnosis: the user-visible
+        // black screen seen on 15+ was caused by the renderer's
+        // PrivacyShield ramp, not by this CGS call. The mac branch ships
+        // this exact code on macOS 15+ without black-screen issues.
+        unsafe {
+            let connection = CGSMainConnectionID();
+            if connection == 0 {
+                return Err(napi::Error::from_reason(format!(
+                    "CGSMainConnectionID returned 0 during {}",
+                    operation
+                )));
+            }
+            let result =
+                CGSSetWindowSharingState(connection as i32, window_number as i32, sharing_state);
+            if result != 0 {
+                return Err(napi::Error::from_reason(format!(
+                    "CGSSetWindowSharingState {} rejected with {} for window {}",
+                    operation, result, window_number
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -913,23 +992,31 @@ pub fn verify_macos_capture_exclusion(window_number: u32) -> napi::Result<bool> 
     macos::verify_capture_exclusion(window_number)
 }
 
-/// Exclude a window from ScreenCaptureKit capture enumeration.
-/// Combines NSWindow.sharingType = .none with CGSSetWindowTags on macOS 15+.
+/// EXPERIMENTAL — gated on the TypeScript side behind
+/// `NATIVELY_TRY_SCK_TAG=1`. Combines `[NSWindow setSharingType:.none]`
+/// (documented capture exclusion) with the reverse-engineered
+/// `CGSSetWindowTags` bit (undocumented). The first half is also what
+/// `setContentProtection(true)` already does, so default code paths
+/// don't call this.
 #[napi]
 pub fn exclude_from_capture(window_number: u32) -> napi::Result<()> {
     macos::exclude_from_capture(window_number)
 }
 
-/// Apply ONLY the CGS window tag for ScreenCaptureKit exclusion (no sharingType change).
-/// On macOS < 15, this is a graceful no-op.
+/// EXPERIMENTAL — gated on the TypeScript side behind
+/// `NATIVELY_TRY_SCK_TAG=1`. Writes ONLY the reverse-engineered
+/// `CGSSetWindowTags` bit (no `setSharingType:` change). Effect on
+/// ScreenCaptureKit cannot be verified externally.
 #[napi]
 pub fn apply_sck_exclusion(window_number: u32) -> napi::Result<()> {
     macos::apply_sck_exclusion(window_number)
 }
 
-/// Verify that the SCK exclusion tag is set on a window via CGSGetWindowTags.
-/// Returns true if the window is properly excluded from SCK enumeration.
-/// On non-macOS, always returns true (window is considered excluded).
+/// EXPERIMENTAL — gated on the TypeScript side behind
+/// `NATIVELY_TRY_SCK_TAG=1`. Read-back of the reverse-engineered CGS
+/// tag bit. Confirms only that our write reached the WindowServer; does
+/// NOT prove ScreenCaptureKit honours the bit. On non-macOS, always
+/// returns true.
 #[napi]
 pub fn verify_sck_exclusion(window_number: u32) -> napi::Result<bool> {
     macos::verify_sck_exclusion(window_number)

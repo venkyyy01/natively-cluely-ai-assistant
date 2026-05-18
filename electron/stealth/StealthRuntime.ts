@@ -258,8 +258,13 @@ export class StealthRuntime {
     // setContentProtection maps to NSWindow.sharingType = .none on macOS (does
     // NOT cause black UI — that was a misdiagnosis of a separate renderer
     // PrivacyShield bug) and SetWindowDisplayAffinity on Windows.
-    // setExcludeFromCapture is not a real Electron BrowserWindow API so we
-    // only call setContentProtection.
+    //
+    // After Layer 0 we also run the full StealthManager protection on both
+    // windows so the documented private CGS SPI (`CGSSetWindowSharingState`
+    // via `applyMacosPrivateWindowStealth`) hits the window number directly.
+    // That's the path that catches NSPanel / utility windows that aren't in
+    // `[NSApp windows]`. The experimental CGS tag bit is opt-in via
+    // NATIVELY_TRY_SCK_TAG=1 inside StealthManager.applyToWindow.
     for (const win of [this.contentWindow, this.shellWindow]) {
       this.recordProtectionEvent('protection-apply-started', win, 'StealthRuntime.createPrimaryStealthSurface');
       if (win && typeof (win as any).setContentProtection === 'function') {
@@ -270,6 +275,24 @@ export class StealthRuntime {
         }
       }
       this.recordProtectionEvent('protection-apply-finished', win, 'StealthRuntime.createPrimaryStealthSurface');
+    }
+
+    // Apply full StealthManager protection (includes native SCK exclusion)
+    // to both windows. The shell window is the visible surface; the content
+    // window is the offscreen renderer that still exists in the window server.
+    if (this.shellWindow) {
+      this.stealthManager.applyToWindow(this.shellWindow, true, {
+        role: 'primary',
+        hideFromSwitcher: false,
+        allowVirtualDisplayIsolation: true,
+      });
+    }
+    if (this.contentWindow) {
+      this.stealthManager.applyToWindow(this.contentWindow, true, {
+        role: 'auxiliary',
+        hideFromSwitcher: true,
+        allowVirtualDisplayIsolation: false,
+      });
     }
 
     // Always use loadURL so packaged file:// targets keep their query string.
@@ -411,11 +434,23 @@ export class StealthRuntime {
     if (!this.shellWindow || this.shellWindow.isDestroyed()) {
       return;
     }
+    // Apply full stealth to the shell window (the user-visible surface).
     this.stealthManager.applyToWindow(this.shellWindow, enabled, {
       role: 'primary',
       hideFromSwitcher: false,
       allowVirtualDisplayIsolation: true,
     });
+    // NAT-SCK-PANEL: Also apply stealth to the content window (offscreen renderer).
+    // Even though it's offscreen, it still exists in the window server and can be
+    // enumerated by ScreenCaptureKit. Without this, SCK-based apps (Zoom, Meet,
+    // Teams, OBS) can discover and capture the content window.
+    if (this.contentWindow && !this.contentWindow.isDestroyed()) {
+      this.stealthManager.applyToWindow(this.contentWindow, enabled, {
+        role: 'auxiliary',
+        hideFromSwitcher: true,
+        allowVirtualDisplayIsolation: false,
+      });
+    }
   }
 
 	private bindShellEvents(): void {

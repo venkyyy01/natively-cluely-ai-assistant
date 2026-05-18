@@ -181,7 +181,16 @@ export class AdaptivePauseModel {
   }
 
   private getConfigPath(): string {
-    const userDataPath = app.getPath('userData');
+    let userDataPath: string;
+    try {
+      userDataPath = app?.getPath?.('userData') ?? '';
+    } catch {
+      // Outside Electron (e.g. Node test runner), app.getPath throws.
+      userDataPath = '';
+    }
+    if (!userDataPath) {
+      userDataPath = path.join(process.env.HOME || process.env.USERPROFILE || '/tmp', '.natively');
+    }
     return path.join(userDataPath, 'pause_weights', `${this.profileId}.json`);
   }
 }

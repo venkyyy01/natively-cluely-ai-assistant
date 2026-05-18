@@ -710,10 +710,26 @@ export class WindowHelper {
           console.warn('[WindowHelper] blur failed:', err)
         }
       }
+    } else if (process.platform === 'darwin') {
+      // macOS: NSPanel with NSWindowStyleMaskNonactivatingPanel can become
+      // the key window without activating the app. After
+      // setActivationPolicy('accessory'), `focus()` is the only reliable way
+      // to make the panel key — clicks alone won't always promote it
+      // because Chromium's hit-testing on a clickthrough-capable surface
+      // can swallow the activation. We don't activate the app or steal
+      // foreground; we just route first-responder to the panel so the
+      // contentView's <input>/<textarea> elements receive keystrokes.
+      //
+      // Skip while clickthrough is on — clickthrough is a deliberate
+      // "ignore me" mode and shouldn't reach into focus management.
+      if (enabled && !this.overlayClickthroughEnabled && this.overlayWindow.isVisible()) {
+        try {
+          this.overlayWindow.focus()
+        } catch (err) {
+          console.warn('[WindowHelper] overlay focus failed:', err)
+        }
+      }
     }
-    // macOS: NSPanel is permanently non-activating regardless of this flag.
-    // The renderer can still focus inputs via first-responder routing on the
-    // panel — the panel becomes key without activating the app.
   }
 
   public isOverlayInteractive(): boolean {
@@ -995,6 +1011,18 @@ this.launcherContentWindow = this.launcherWindow
   //    the panel without `[NSApp activate]` running, so any underlying
   //    browser tab keeps key-window status — no `blur` or `focusout` event
   //    fires in the page.
+  //
+  //    TRADE-OFF: NSPanel windows are typically missing from
+  //    `[NSApp windows]` enumeration. The native stealth module's
+  //    setSharingType: path requires the NSWindow lookup, so panel-mode
+  //    overlays rely solely on the CGS SPI (CGSSetWindowSharingState) for
+  //    capture exclusion. The mac branch never used `type: 'panel'` and
+  //    its invisibility worked reliably; we therefore make panel-mode
+  //    OPT-IN via NATIVELY_OVERLAY_NSPANEL=1 to preserve the historical
+  //    behaviour by default. Set the env var only if you need the
+  //    blur-proof focus behaviour and have verified SCK exclusion still
+  //    holds for your build.
+  //
   //  - win32: `focusable: false` is the Electron primitive for
   //    WS_EX_NOACTIVATE. When passed at construction time Electron sets the
   //    extended style on the HWND. We additionally re-assert
@@ -1002,6 +1030,8 @@ this.launcherContentWindow = this.launcherWindow
   //    HWND exists, in case Electron drops the bits on a later setBounds /
   //    show. With those bits set, clicking the overlay does NOT promote
   //    Electron to the foreground app, so Chrome does not fire blur.
+  const useMacOverlayPanel =
+    process.platform === 'darwin'
   const overlaySettings: Electron.BrowserWindowConstructorOptions = {
     width: 600,
     height: 1,
@@ -1027,9 +1057,11 @@ this.launcherContentWindow = this.launcherWindow
     skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     // macOS only: tag the overlay as a panel so AppKit instantiates it as
-    // NSPanel with NSWindowStyleMaskNonactivatingPanel. No effect on other
-    // platforms (Electron ignores the field there).
-    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
+    // NSPanel with NSWindowStyleMaskNonactivatingPanel. Opt-in via env var
+    // because panels can fall out of [NSApp windows] enumeration which
+    // breaks the native setSharingType: path. Default behaviour (env var
+    // unset) matches the working `mac` branch overlay.
+    ...(useMacOverlayPanel ? { type: 'panel' as const } : {}),
   }
 
     if (useStealthRuntime) {
@@ -1318,21 +1350,21 @@ this.launcherContentWindow = this.launcherWindow
           this.applyWindowsOverlayNoActivate();
         }
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-        // STEALTH: Use showInactive() on macOS to prevent stealing focus from the
-        // browser. The overlay appears on screen but Chrome keeps key-window status,
-        // so proctoring scripts never see a blur event. The user can click the overlay
-        // input field when they need to type — NSPanel focus doesn't activate the app.
+        // Show the overlay and make it key (interactive).
+        // On macOS with type:'panel', focus() calls makeKeyAndOrderFront: which
+        // makes the NSPanel "key" (receives keyboard input) WITHOUT activating
+        // the app — NSWindowStyleMaskNonactivatingPanel prevents [NSApp activate].
+        // This matches the working mac branch behavior.
         if (process.platform === 'darwin') {
           this.overlayWindow!.showInactive();
+          if (!this.overlayClickthroughEnabled) {
+            this.overlayWindow!.focus();
+          }
         } else {
           this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay')
         }
         this.stealthManager.reapplyAfterShow(this.overlayWindow);
-        // Only call focus() when:
-        //   - Linux/other (no blur-proof primitive available), OR
-        //   - Windows AND the user has opted into interactive mode for typing
-        // Never on macOS (NSPanel handles activation; calling focus() would
-        // promote the app and trigger blur on the browser).
+        // Focus on non-macOS platforms
         if (!this.overlayClickthroughEnabled && process.platform !== 'darwin') {
           if (process.platform === 'win32') {
             if (this.overlayInteractive) {

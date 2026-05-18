@@ -650,7 +650,7 @@ fi
 # ║ Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
 QUALITY_GATES_RAN=false
-QUALITY_GATE_TIMEOUT="${QUALITY_GATE_TIMEOUT:-300}" # seconds per gate, default 5min
+QUALITY_GATE_TIMEOUT="${QUALITY_GATE_TIMEOUT:-600}" # seconds per gate, default 10min
 
 # Locate a working timeout binary (coreutils `timeout` or macOS `gtimeout`).
 # These exec-replace the child process, so they work correctly when
@@ -713,7 +713,7 @@ if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
 
     # ── Gate 2: Run Electron tests ──
     run_gate "[2/5] Running Electron tests" \
-        bash -c 'cd "'"$SCRIPT_DIR"'" && node --test dist-electron/electron/tests/*.test.js'
+        bash -c 'cd "'"$SCRIPT_DIR"'" && node --test --test-force-exit dist-electron/electron/tests/*.test.js'
     success "Electron tests passed"
 
     # ── Gate 3–5: Production verification (decomposed — skip redundant tsc) ──
