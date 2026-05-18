@@ -506,9 +506,12 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
 this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
-if (this.isUndetectable) {
-  this.setContainmentActive(true, 'protected_startup')
-}
+// NOTE: Startup containment removed. The window is born with Layer 0
+// protection applied synchronously (createDirectWindow → applyInitialStealth)
+// and markStealthReady resolves immediately. The old `protected_startup`
+// containment blocked model-set IPC calls and caused "CONTAINMENT_ACTIVE"
+// errors on every boot, preventing the renderer from configuring providers.
+// Stealth protection is already active before any content is shown.
 this.syncPrivacyShieldState()
 
 // Initialize Checkpointer

@@ -1855,7 +1855,14 @@ export class StealthManager extends EventEmitter {
       this.cgWindowMonitorHandle ||
       !this.isEnabled() ||
       !this.isEnhancedStealthEnabled() ||
-      this.platform !== 'darwin'
+      this.platform !== 'darwin' ||
+      // macOS 15+: CGWindowListCopyWindowInfo reports stale sharingState
+      // values (> 0) even after setSharingType:.none is applied. This
+      // causes false-positive "Window N is visible to capture tools"
+      // detections that trigger emergency protection (hiding the window
+      // mid-session). Disable the monitor on 15+ — Layer 0/1/2/3 handle
+      // capture exclusion without needing this self-check.
+      this.isMacOSVersionCompatible('15.0')
     ) {
       return;
     }
